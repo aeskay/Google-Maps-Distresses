@@ -7,14 +7,16 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
-const FIREBASE_CONFIG_STORAGE_KEY = 'txdot-distress:firebase-config';
+const FIREBASE_CONFIG_STORAGE_KEY = 'google_distress_firebase_config';
 
 export function getStoredFirebaseConfig() {
   try {
     const raw = localStorage.getItem(FIREBASE_CONFIG_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.apiKey) return parsed;
+    }
   } catch {}
-
   return {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
     authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
@@ -25,12 +27,14 @@ export function getStoredFirebaseConfig() {
   };
 }
 
-export function saveStoredFirebaseConfig(config) {
-  if (config) {
-    localStorage.setItem(FIREBASE_CONFIG_STORAGE_KEY, JSON.stringify(config));
-  } else {
-    localStorage.removeItem(FIREBASE_CONFIG_STORAGE_KEY);
-  }
+export function saveStoredFirebaseConfig(cfg) {
+  try {
+    if (cfg && typeof cfg === 'object') {
+      localStorage.setItem(FIREBASE_CONFIG_STORAGE_KEY, JSON.stringify(cfg));
+    } else {
+      localStorage.removeItem(FIREBASE_CONFIG_STORAGE_KEY);
+    }
+  } catch {}
 }
 
 const activeConfig = getStoredFirebaseConfig();

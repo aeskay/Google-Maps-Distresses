@@ -578,7 +578,12 @@ export async function hydrateSectionsWithCachedCoordinates(sections) {
 
   let hasUpdates = false;
   const updated = sections.map(s => {
-    if (s.coordinates?.status === 'success' && s.coordinates.begin) {
+    if (
+      s.coordinates?.status === 'success' &&
+      s.coordinates.begin &&
+      Array.isArray(s.coordinates.path) &&
+      s.coordinates.path.length >= 2
+    ) {
       return s;
     }
     const keyFull = getSectionGpsKey(s.highway, s.beginRef, s.endRef, s.countyName, s.district);
@@ -588,6 +593,19 @@ export async function hydrateSectionsWithCachedCoordinates(sections) {
     if (cached && cached.status === 'success') {
       hasUpdates = true;
       return { ...s, coordinates: cached };
+    }
+
+    // Fallback: if begin and end exist without a path array, construct a 2-point path
+    if (s.coordinates?.begin && s.coordinates?.end && (!s.coordinates.path || s.coordinates.path.length < 2)) {
+      hasUpdates = true;
+      return {
+        ...s,
+        coordinates: {
+          ...s.coordinates,
+          status: 'success',
+          path: [s.coordinates.begin, s.coordinates.end],
+        },
+      };
     }
     return s;
   });

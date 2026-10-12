@@ -13,7 +13,6 @@ export default function Topbar({
   onNewProject,
   onOpenProjects,
   onSaveProject,
-  onOpenSettings,
   onOpenAuth,
   addToast,
 }) {
@@ -52,14 +51,6 @@ export default function Topbar({
           title="Save active project to Cloud Firestore"
         >
           💾 Save
-        </button>
-
-        <button
-          className="btn btn--secondary btn--sm"
-          onClick={onOpenSettings}
-          title="Configure Google Maps API Key and Firebase credentials"
-        >
-          ⚙️ Settings
         </button>
 
         {saveStatus === 'saving' && (

@@ -3,23 +3,27 @@
  * Asynchronous loader for Google Maps JavaScript API and Street View Static API helpers.
  */
 
-const API_KEY_STORAGE_KEY = 'txdot-distress:google-maps-api-key';
-
 let loadPromise = null;
 let currentLoadedKey = null;
 
+const STORAGE_KEY = 'google_maps_api_key';
+
 export function getStoredGoogleMapsApiKey() {
-  const custom = localStorage.getItem(API_KEY_STORAGE_KEY);
-  if (custom && custom.trim()) return custom.trim();
-  return import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved && saved.trim()) return saved.trim();
+  } catch {}
+  return (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim();
 }
 
 export function saveGoogleMapsApiKey(key) {
-  if (key) {
-    localStorage.setItem(API_KEY_STORAGE_KEY, key.trim());
-  } else {
-    localStorage.removeItem(API_KEY_STORAGE_KEY);
-  }
+  try {
+    if (key && key.trim()) {
+      localStorage.setItem(STORAGE_KEY, key.trim());
+    } else {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  } catch {}
 }
 
 /**

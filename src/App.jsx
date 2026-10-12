@@ -16,7 +16,6 @@ import ToastContainer from './components/ToastContainer';
 import NewProjectModal from './components/modals/NewProjectModal';
 import OpenProjectsModal from './components/modals/OpenProjectsModal';
 import AuthModal from './components/modals/AuthModal';
-import SettingsModal from './components/modals/SettingsModal';
 
 import { onAuthChange } from './firebase/authService';
 import {
@@ -74,7 +73,6 @@ export default function App() {
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [showOpenProjectsModal, setShowOpenProjectsModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [toasts, setToasts] = useState([]);
 
   const saveTimerRef = useRef(null);
@@ -489,7 +487,6 @@ export default function App() {
             addToast('success', 'Project Saved', `"${selectedProject.name}" saved to cloud.`);
           }
         }}
-        onOpenSettings={() => setShowSettingsModal(true)}
         onOpenAuth={() => setShowAuthModal(true)}
         addToast={addToast}
       />
@@ -544,7 +541,6 @@ export default function App() {
               selectedSectionId={selectedSectionId}
               onSelectSection={handleSelectSection}
               onUpdateSection={handleUpdateSection}
-              onOpenSettings={() => setShowSettingsModal(true)}
               addToast={addToast}
               activeTab={activeTab}
               focusSectionTrigger={focusSectionTrigger}
@@ -598,13 +594,6 @@ export default function App() {
       {showAuthModal && (
         <AuthModal
           onClose={() => setShowAuthModal(false)}
-          addToast={addToast}
-        />
-      )}
-
-      {showSettingsModal && (
-        <SettingsModal
-          onClose={() => setShowSettingsModal(false)}
           addToast={addToast}
         />
       )}

@@ -36,7 +36,6 @@ export default function MapTab({
   selectedSectionId,
   onSelectSection,
   onUpdateSection,
-  onOpenSettings,
   addToast,
   activeTab = 'map',
   focusSectionTrigger = 0,
@@ -47,9 +46,15 @@ export default function MapTab({
 
   const googleMapInstance = useRef(null);
   const panoramaInstance = useRef(null);
+  const mapDivRef = useRef(null);
+  const panoDivRef = useRef(null);
   const streetViewServiceRef = useRef(null);
   const lastFetchedPanoRef = useRef(null);
   const polylinesRef = useRef([]);
+  const polylinesMapRef = useRef(new Map());
+  const selectedHaloRef = useRef(null);
+  const prevSelectedIdRef = useRef(null);
+  const suppressMapPanUntilRef = useRef(0);
   const extentMarkersRef = useRef([]);
   const captureMarkersRef = useRef([]);
   const currentLocationMarkerRef = useRef(null);
@@ -58,6 +63,7 @@ export default function MapTab({
 
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const [mapsError, setMapsError] = useState(null);
+  const [mapInstanceVersion, setMapInstanceVersion] = useState(0);
 
   // View Layout: 'split' | 'pano-only' | 'map-only'
   const [viewLayout, setViewLayout] = useState('split');
@@ -294,12 +300,31 @@ export default function MapTab({
   const selectedSectionRef = useRef(selectedSection);
   selectedSectionRef.current = selectedSection;
 
-  // Refocus map bounds on current section and all its distress points
+  // Helper to get valid polyline coordinates for a section (with begin/end fallback)
+  const getSectionPathCoords = useCallback((sec) => {
+    const coords = sec?.coordinates;
+    if (!coords) return [];
+    if (Array.isArray(coords.path) && coords.path.length >= 2) {
+      return coords.path;
+    }
+    if (Array.isArray(coords.begin) && Array.isArray(coords.end)) {
+      return [coords.begin, coords.end];
+    }
+    if (Array.isArray(coords.begin)) {
+      return [coords.begin];
+    }
+    return [];
+  }, []);
+
+  // Refocus map bounds immediately on current section and all its distress points
   const focusOnSection = useCallback(() => {
     const sec = selectedSectionRef.current;
     if (!googleMapInstance.current || !window.google?.maps || !sec) return;
-    const path = sec.coordinates?.path;
-    if (path && path.length > 0) {
+    const path = getSectionPathCoords(sec);
+    if (path.length > 0) {
+      // Suppress Street View position_changed from calling panTo and canceling fitBounds
+      suppressMapPanUntilRef.current = Date.now() + 1800;
+
       const secBounds = new window.google.maps.LatLngBounds();
       path.forEach(([lat, lng]) => secBounds.extend({ lat, lng }));
 
@@ -313,29 +338,43 @@ export default function MapTab({
         });
       }
 
+      // Teleport center first to skip slow cross-state fly animation, then fit bounds
+      googleMapInstance.current.setCenter(secBounds.getCenter());
       googleMapInstance.current.fitBounds(secBounds, 40);
     }
-  }, []);
+  }, [getSectionPathCoords]);
 
-  // Focus map when selectedSectionId or focusSectionTrigger changes
+  // Focus map immediately and position Street View when selectedSectionId or focusSectionTrigger changes
   useEffect(() => {
     const sec = selectedSectionRef.current;
-    if (sec?.coordinates?.path?.length > 0) {
+    if (!sec) return;
+
+    const path = getSectionPathCoords(sec);
+    if (path.length > 0) {
       focusOnSection();
     }
-  }, [selectedSectionId, focusSectionTrigger, focusOnSection]);
 
-  // If user is in Street View and switches to a different section, move Street View to that section's start
-  useEffect(() => {
-    const sec = selectedSectionRef.current;
-    if (isStreetViewActive && sec?.coordinates?.begin && panoramaInstance.current) {
+    if (sec.coordinates?.begin) {
       const coord = sec.coordinates.begin;
       const pos = { lat: coord[0], lng: coord[1] };
-      panoramaInstance.current.setPosition(pos);
-      fetchPanoTimeline(null, pos);
+      // Immediately move the orange locator pin to the new section start
+      setCurrentPosition(pos);
+
+      // Defer heavy Street View 3D panorama & timeline network calls by 1 frame
+      // so the map canvas paints the blue extent line and red distress pins first
+      const timerId = setTimeout(() => {
+        if (panoramaInstance.current) {
+          suppressMapPanUntilRef.current = Date.now() + 1800;
+          panoramaInstance.current.setPosition(pos);
+          panoramaInstance.current.setVisible(true);
+          setIsStreetViewActive(true);
+          fetchPanoTimeline(null, pos);
+        }
+      }, 40);
+
+      return () => clearTimeout(timerId);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSectionId]);
+  }, [selectedSection?.id, selectedSectionId, focusSectionTrigger, focusOnSection, fetchPanoTimeline, getSectionPathCoords, mapInstanceVersion]);
 
   // Resize and refocus map when tab becomes active
   useEffect(() => {
@@ -344,11 +383,11 @@ export default function MapTab({
       if (panoramaInstance.current) {
         window.google.maps.event.trigger(panoramaInstance.current, 'resize');
       }
-      if (selectedSectionRef.current?.coordinates?.path?.length > 0) {
+      if (getSectionPathCoords(selectedSectionRef.current).length > 0) {
         focusOnSection();
       }
     }
-  }, [activeTab, focusOnSection]);
+  }, [activeTab, focusOnSection, getSectionPathCoords]);
 
   // ── Drag Handle for Resizing Map vs Street View in Split Mode ──────────────
   const handleSplitPointerDown = useCallback((e) => {
@@ -411,10 +450,29 @@ export default function MapTab({
   // ── Initialize Google Map & Street View Panorama ───────────────────────────
   useEffect(() => {
     if (!mapsLoaded || !mapContainerRef.current || !panoContainerRef.current) return;
-    if (googleMapInstance.current) return; // already initialized
+    if (
+      googleMapInstance.current &&
+      panoramaInstance.current &&
+      mapDivRef.current === mapContainerRef.current &&
+      panoDivRef.current === panoContainerRef.current
+    ) {
+      return; // already initialized on the exact current DOM nodes
+    }
 
     try {
       const gMaps = window.google.maps;
+
+      // Clear any stale DOM content if containers were recreated
+      mapContainerRef.current.innerHTML = '';
+      panoContainerRef.current.innerHTML = '';
+      polylinesRef.current = [];
+      polylinesMapRef.current.clear();
+      selectedHaloRef.current = null;
+      prevSelectedIdRef.current = null;
+      extentMarkersRef.current = [];
+      captureMarkersRef.current = [];
+      currentLocationMarkerRef.current = null;
+      currentLocationDotRef.current = null;
 
       // Texas default center
       const defaultCenter = { lat: 31.9686, lng: -99.9018 };
@@ -446,8 +504,6 @@ export default function MapTab({
         imageDateControl: true, // Native capture date badge on Street View
       });
 
-      map.setStreetView(panorama);
-
       // Listeners for Panorama movements
       panorama.addListener('position_changed', () => {
         const pos = panorama.getPosition();
@@ -456,9 +512,13 @@ export default function MapTab({
           const lng = pos.lng();
           setCurrentPosition({ lat, lng });
 
-          // Center map subtly on street view position
-          if (map) {
-            map.panTo({ lat, lng });
+          // Keep street view position visible on map ONLY during manual road navigation,
+          // never during a programmatic section switch (which would cancel fitBounds)
+          if (map && Date.now() > suppressMapPanUntilRef.current) {
+            const currentBounds = map.getBounds();
+            if (currentBounds && !currentBounds.contains(pos)) {
+              map.panTo({ lat, lng });
+            }
           }
         }
       });
@@ -510,13 +570,16 @@ export default function MapTab({
         }
       });
 
+      mapDivRef.current = mapContainerRef.current;
+      panoDivRef.current = panoContainerRef.current;
       googleMapInstance.current = map;
       panoramaInstance.current = panorama;
+      setMapInstanceVersion(v => v + 1);
     } catch (err) {
       console.error('Error initializing Google Maps:', err);
       setMapsError(err.message);
     }
-  }, [mapsLoaded, addToast, fetchPanoTimeline]);
+  });
 
   // ── Calculate Distance from Start whenever Position or Section changes ─────
   useEffect(() => {
@@ -525,52 +588,42 @@ export default function MapTab({
       return;
     }
 
-    const path = selectedSection.coordinates.path || [];
+    const path = getSectionPathCoords(selectedSection);
     const begin = selectedSection.coordinates.begin;
     const dist = calculateDistanceFromStart([currentPosition.lat, currentPosition.lng], path, begin);
     setCurrentDistance(dist);
-  }, [currentPosition, selectedSection]);
+  }, [currentPosition, selectedSection, getSectionPathCoords]);
 
-  // ── Render Polylines on Map for Sections ───────────────────────────────────
+  // ── 1. Maintain Cached Polylines on Map for Project Sections ───────────────
   useEffect(() => {
     if (!googleMapInstance.current || !window.google?.maps) return;
     const gMaps = window.google.maps;
-
-    // Clear old polylines & extent markers
-    polylinesRef.current.forEach(p => p.setMap(null));
-    polylinesRef.current = [];
-    extentMarkersRef.current.forEach(m => m.setMap(null));
-    extentMarkersRef.current = [];
-
-    const bounds = new gMaps.LatLngBounds();
-    let hasCoords = false;
+    const polyMap = polylinesMapRef.current;
+    const activeIds = new Set();
 
     sections.forEach(sec => {
-      const isSelected = String(sec.id) === String(selectedSection?.id);
+      const secId = String(sec.id);
+      const rawPath = getSectionPathCoords(sec);
+      if (rawPath.length < 2) return;
+
+      activeIds.add(secId);
       const coords = sec.coordinates;
-      if (!coords || coords.status !== 'success' || !coords.path || coords.path.length < 2) return;
+      const defaultColor = coords?.roadbed === 'R' ? '#ea580c' : coords?.roadbed === 'L' ? '#0284c7' : '#059669';
+      const isSelected = secId === String(selectedSectionRef.current?.id);
 
-      const pathLatLngs = coords.path.map(([lat, lng]) => ({ lat, lng }));
-      pathLatLngs.forEach(pt => bounds.extend(pt));
-      hasCoords = true;
-
-      const defaultColor = coords.roadbed === 'R' ? '#ea580c' : coords.roadbed === 'L' ? '#0284c7' : '#059669';
-
-      if (isSelected) {
-        // High-visibility halo outline under the blue focus line
-        const haloPolyline = new gMaps.Polyline({
-          path: pathLatLngs,
-          geodesic: true,
-          strokeColor: '#ffffff',
-          strokeOpacity: 0.9,
-          strokeWeight: 10,
-          zIndex: 998,
-          map: googleMapInstance.current,
-        });
-        polylinesRef.current.push(haloPolyline);
+      const existing = polyMap.get(secId);
+      if (existing && existing.coordsRef === coords) {
+        // Already created with identical coordinates
+        existing.defaultColor = defaultColor;
+        return;
       }
 
-      // Primary roadway polyline (Royal Blue for selected, Roadbed color for others)
+      // If coordinates changed for this section, remove old polyline
+      if (existing) {
+        existing.polyline.setMap(null);
+      }
+
+      const pathLatLngs = rawPath.map(([lat, lng]) => ({ lat, lng }));
       const polyline = new gMaps.Polyline({
         path: pathLatLngs,
         geodesic: true,
@@ -583,8 +636,8 @@ export default function MapTab({
 
       polyline.addListener('click', (e) => {
         onSelectSection(sec.id);
-        focusOnSection();
         if (e.latLng && panoramaInstance.current) {
+          suppressMapPanUntilRef.current = Date.now() + 1800;
           panoramaInstance.current.setPosition(e.latLng);
           panoramaInstance.current.setVisible(true);
           setIsStreetViewActive(true);
@@ -595,10 +648,77 @@ export default function MapTab({
         }
       });
 
-      polylinesRef.current.push(polyline);
+      polyMap.set(secId, {
+        polyline,
+        defaultColor,
+        coordsRef: coords,
+        pathLatLngs,
+      });
     });
 
-    // Render Start & End extent pins on the map for the selected section
+    // Remove polylines for deleted sections
+    for (const [secId, entry] of polyMap.entries()) {
+      if (!activeIds.has(secId)) {
+        entry.polyline.setMap(null);
+        polyMap.delete(secId);
+      }
+    }
+  }, [sections, getSectionPathCoords, onSelectSection, fetchPanoTimeline, mapInstanceVersion]);
+
+  // ── 2. Instant Selected Section Blue Extent Highlight & Start/End Pins ─────
+  useEffect(() => {
+    if (!googleMapInstance.current || !window.google?.maps) return;
+    const gMaps = window.google.maps;
+    const polyMap = polylinesMapRef.current;
+    const currentId = selectedSection ? String(selectedSection.id) : null;
+    const prevId = prevSelectedIdRef.current;
+
+    // Revert previously selected section polyline back to default roadbed style
+    if (prevId && prevId !== currentId && polyMap.has(prevId)) {
+      const prevEntry = polyMap.get(prevId);
+      prevEntry.polyline.setOptions({
+        strokeColor: prevEntry.defaultColor,
+        strokeOpacity: 0.6,
+        strokeWeight: 4,
+        zIndex: 10,
+      });
+    }
+
+    // Highlight newly selected section polyline in Royal Blue + White Halo
+    if (currentId && polyMap.has(currentId)) {
+      const currEntry = polyMap.get(currentId);
+      currEntry.polyline.setOptions({
+        strokeColor: '#2563eb',
+        strokeOpacity: 1.0,
+        strokeWeight: 7,
+        zIndex: 1000,
+      });
+
+      if (selectedHaloRef.current) {
+        selectedHaloRef.current.setPath(currEntry.pathLatLngs);
+        selectedHaloRef.current.setMap(googleMapInstance.current);
+      } else {
+        selectedHaloRef.current = new gMaps.Polyline({
+          path: currEntry.pathLatLngs,
+          geodesic: true,
+          strokeColor: '#ffffff',
+          strokeOpacity: 0.9,
+          strokeWeight: 10,
+          zIndex: 998,
+          clickable: false,
+          map: googleMapInstance.current,
+        });
+      }
+    } else if (selectedHaloRef.current) {
+      selectedHaloRef.current.setMap(null);
+    }
+
+    prevSelectedIdRef.current = currentId;
+
+    // Update Start & End extent pins for selected section
+    extentMarkersRef.current.forEach(m => m.setMap(null));
+    extentMarkersRef.current = [];
+
     if (selectedSection?.coordinates?.begin && selectedSection?.coordinates?.end) {
       const beginPos = { lat: selectedSection.coordinates.begin[0], lng: selectedSection.coordinates.begin[1] };
       const endPos = { lat: selectedSection.coordinates.end[0], lng: selectedSection.coordinates.end[1] };
@@ -608,6 +728,7 @@ export default function MapTab({
         map: googleMapInstance.current,
         title: `Start of Section ${selectedSection.id} (RM ${selectedSection.beginRef})`,
         zIndex: 1500,
+        optimized: true,
         icon: {
           path: gMaps.SymbolPath.CIRCLE,
           scale: 6,
@@ -623,6 +744,7 @@ export default function MapTab({
         map: googleMapInstance.current,
         title: `End of Section ${selectedSection.id} (RM ${selectedSection.endRef})`,
         zIndex: 1500,
+        optimized: true,
         icon: {
           path: gMaps.SymbolPath.CIRCLE,
           scale: 6,
@@ -635,16 +757,9 @@ export default function MapTab({
 
       extentMarkersRef.current.push(beginMarker, endMarker);
     }
+  }, [selectedSection?.id, selectedSection?.coordinates, sections, mapInstanceVersion]);
 
-    // If selected section changed and has coordinates, zoom to fit section extent and distresses
-    if (selectedSection?.coordinates?.path?.length > 0) {
-      focusOnSection();
-    } else if (hasCoords && !selectedSection) {
-      googleMapInstance.current.fitBounds(bounds);
-    }
-  }, [sections, selectedSection, onSelectSection, focusOnSection, fetchPanoTimeline]);
-
-  // ── Render Distress Capture Pins on Map ────────────────────────────────────
+  // ── 3. Render Distress Capture Pins on Map ─────────────────────────────────
   useEffect(() => {
     if (!googleMapInstance.current || !window.google?.maps) return;
     const gMaps = window.google.maps;
@@ -663,6 +778,7 @@ export default function MapTab({
         map: googleMapInstance.current,
         title: `${c.distressType} (+${c.distanceFromStartMiles?.toFixed(2)} mi)${c.imageYear ? ` · Year: ${c.imageYear}` : ''}`,
         zIndex: 2000,
+        optimized: true,
         icon: {
           path: gMaps.SymbolPath.CIRCLE,
           scale: 8,
@@ -679,7 +795,7 @@ export default function MapTab({
 
       captureMarkersRef.current.push(marker);
     });
-  }, [selectedSection]);
+  }, [selectedSection?.id, selectedSection?.captures, mapInstanceVersion]);
 
   // ── Synchronize Live Street View Location & Heading Indicator on Map ───────
   useEffect(() => {
@@ -763,7 +879,7 @@ export default function MapTab({
       });
       currentLocationDotRef.current = dot;
     }
-  }, [currentPosition, currentPov?.heading, currentDistance]);
+  }, [currentPosition, currentPov?.heading, currentDistance, mapInstanceVersion]);
 
   // Clean up location markers on unmount
   useEffect(() => {
@@ -779,18 +895,18 @@ export default function MapTab({
     };
   }, []);
 
-  // Trigger resize and center map on location when switching layout (e.g. Split to Map Only)
+  // Trigger resize and fit section bounds when switching layout (Split / Street View / Map)
   useEffect(() => {
     if (googleMapInstance.current && window.google?.maps) {
       window.google.maps.event.trigger(googleMapInstance.current, 'resize');
       if (panoramaInstance.current) {
         window.google.maps.event.trigger(panoramaInstance.current, 'resize');
       }
-      if (currentPosition) {
-        googleMapInstance.current.panTo({ lat: currentPosition.lat, lng: currentPosition.lng });
+      if (selectedSectionRef.current?.coordinates?.path?.length > 0) {
+        focusOnSection();
       }
     }
-  }, [viewLayout, currentPosition]);
+  }, [viewLayout, focusOnSection]);
 
   // ── Jump to Section Start in Street View ───────────────────────────────────
   const handleEnterStreetView = useCallback((atEnd = false) => {
@@ -806,12 +922,9 @@ export default function MapTab({
     panoramaInstance.current.setVisible(true);
     setIsStreetViewActive(true);
 
-    if (googleMapInstance.current) {
-      googleMapInstance.current.panTo(pos);
-      googleMapInstance.current.setZoom(17);
-    }
+    focusOnSection();
     fetchPanoTimeline(null, pos);
-  }, [selectedSection, addToast, fetchPanoTimeline]);
+  }, [selectedSection, addToast, fetchPanoTimeline, focusOnSection]);
 
   // ── Capture Distress Action ────────────────────────────────────────────────
   const handleCaptureDistress = useCallback(async () => {
@@ -922,14 +1035,11 @@ export default function MapTab({
         <div style={{ maxWidth: 480, textAlign: 'center', background: 'var(--bg-surface)', padding: 32, borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-default)' }}>
           <div style={{ fontSize: 42, marginBottom: 16 }}>🗺️</div>
           <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: 'var(--text-primary)' }}>
-            Google Maps API Key Required
+            Google Maps Unavailable
           </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>
-            To view the interactive satellite map, navigate along roadway sections in Google Street View, and take high-resolution distress snapshots, please provide your Google Maps API key.
+          <div style={{ color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.6 }}>
+            Ensure <code>VITE_GOOGLE_MAPS_API_KEY</code> is configured in your environment variables.
           </div>
-          <button className="btn btn--primary btn--md" onClick={onOpenSettings}>
-            ⚙️ Open API Settings & Enter Key
-          </button>
         </div>
       </div>
     );
@@ -1016,21 +1126,9 @@ export default function MapTab({
           userSelect: isDraggingSplit ? 'none' : 'auto',
         }}
       >
-        {/* Transparent drag protection overlay to prevent maps from swallowing pointer events */}
-        {isDraggingSplit && (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              zIndex: 9999,
-              cursor: 'col-resize',
-              userSelect: 'none',
-            }}
-          />
-        )}
-
-        {/* Google Map Container with Floating Indicator Badge */}
+        {/* Google Map Container */}
         <div
+          key="map-pane"
           style={{
             width: viewLayout === 'split' ? `calc(${splitPercent}% - 5px)` : (viewLayout === 'map-only' ? '100%' : '0px'),
             flex: 'none',
@@ -1040,103 +1138,46 @@ export default function MapTab({
           }}
         >
           <div
+            key="map-canvas"
             ref={mapContainerRef}
             style={{ width: '100%', height: '100%' }}
           />
-
-          {/* Floating Live Indicator Badge on Map */}
-          {currentPosition && (
-            <div style={{
-              position: 'absolute',
-              top: 12,
-              left: 12,
-              zIndex: 20,
-              background: 'rgba(255, 255, 255, 0.94)',
-              backdropFilter: 'blur(6px)',
-              border: '1px solid var(--border-strong)',
-              borderRadius: 'var(--radius-full)',
-              padding: '4px 12px',
-              boxShadow: 'var(--shadow-modal)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 11,
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-            }}>
-              <span style={{
-                display: 'inline-block',
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: '#f97316',
-                boxShadow: '0 0 0 3px rgba(249, 115, 22, 0.28)',
-              }} />
-              <span>Street View: <strong>+{currentDistance.toFixed(2)} mi</strong> ({Math.round(currentPov.heading)}°)</span>
-              <button
-                type="button"
-                className="btn btn--ghost btn--xs"
-                onClick={() => {
-                  if (googleMapInstance.current) {
-                    googleMapInstance.current.panTo({ lat: currentPosition.lat, lng: currentPosition.lng });
-                    googleMapInstance.current.setZoom(18);
-                  }
-                }}
-                title="Pan map to current location"
-                style={{ padding: '2px 6px', fontSize: 10, color: 'var(--accent-primary)', fontWeight: 700 }}
-              >
-                🎯 Pan Map
-              </button>
-              {viewLayout === 'map-only' && (
-                <button
-                  type="button"
-                  className="btn btn--primary btn--xs"
-                  onClick={() => setViewLayout('split')}
-                  title="Switch to Split View to see Street View alongside Map"
-                  style={{ padding: '2px 8px', fontSize: 10, borderRadius: 10 }}
-                >
-                  Open Street View
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
         {/* Draggable Divider Splitter */}
-        {viewLayout === 'split' && (
+        <div
+          key="split-resizer"
+          onPointerDown={handleSplitPointerDown}
+          className="split-resizer"
+          style={{
+            width: 10,
+            flex: 'none',
+            cursor: 'col-resize',
+            position: 'relative',
+            zIndex: 25,
+            background: isDraggingSplit ? 'var(--accent-primary)' : 'var(--border-default)',
+            display: viewLayout === 'split' ? 'flex' : 'none',
+            alignItems: 'center',
+            justifyContent: 'center',
+            userSelect: 'none',
+            touchAction: 'none',
+          }}
+          title="Drag to resize Map / Street View ratio"
+        >
           <div
-            onPointerDown={handleSplitPointerDown}
-            className="split-resizer"
             style={{
-              width: 10,
-              flex: 'none',
-              cursor: 'col-resize',
-              position: 'relative',
-              zIndex: 25,
-              background: isDraggingSplit ? 'var(--accent-primary)' : 'var(--border-default)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              userSelect: 'none',
-              touchAction: 'none',
+              width: 4,
+              height: 36,
+              borderRadius: 2,
+              background: isDraggingSplit ? '#ffffff' : 'var(--text-muted)',
+              opacity: 0.8,
             }}
-            title="Drag to resize Map / Street View ratio"
-          >
-            <div
-              style={{
-                width: 4,
-                height: 36,
-                borderRadius: 2,
-                background: isDraggingSplit ? '#ffffff' : 'var(--text-muted)',
-                opacity: 0.8,
-              }}
-            />
-          </div>
-        )}
+          />
+        </div>
 
         {/* Street View Container */}
         <div
-          ref={panoContainerRef}
+          key="pano-pane"
           style={{
             width: viewLayout === 'split' ? `calc(${100 - splitPercent}% - 5px)` : (viewLayout === 'pano-only' ? '100%' : '0px'),
             flex: 'none',
@@ -1145,6 +1186,27 @@ export default function MapTab({
             display: viewLayout === 'map-only' ? 'none' : 'block',
           }}
         >
+          {/* Dedicated empty DOM container for Google StreetViewPanorama */}
+          <div
+            key="pano-canvas"
+            ref={panoContainerRef}
+            style={{ width: '100%', height: '100%' }}
+          />
+
+          {/* Transparent drag protection overlay to prevent maps from swallowing pointer events */}
+          {isDraggingSplit && (
+            <div
+              key="drag-overlay"
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 9999,
+                cursor: 'col-resize',
+                userSelect: 'none',
+              }}
+            />
+          )}
+
           {/* Overlay Placeholder if Street View is not yet active */}
           {!isStreetViewActive && (
             <div style={{
