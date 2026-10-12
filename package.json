@@ -1,0 +1,27 @@
+{
+  "name": "google-maps-distresses",
+  "productName": "TxDOT Distress Capture & Studio",
+  "private": true,
+  "version": "1.0.0",
+  "description": "TxDOT Roadway Distress Capture using Google Maps Street View and LRS Reference Markers",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "firebase": "^12.19.0",
+    "idb-keyval": "^6.3.0",
+    "jszip": "^3.10.2",
+    "papaparse": "^5.4.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "uuid": "^9.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.3"
+  }
+}
