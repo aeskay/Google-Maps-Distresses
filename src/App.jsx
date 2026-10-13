@@ -466,6 +466,17 @@ export default function App() {
     }
   }, [selectedProjectId, mutate, currentUser, selectedSectionId]);
 
+  const handleUpdateProject = useCallback((updatedProject) => {
+    if (!updatedProject?.id) return;
+    mutate(prev => {
+      const nextProjects = prev.projects.map(p => p.id === updatedProject.id ? updatedProject : p);
+      if (currentUser) {
+        saveUserProject(currentUser.uid, updatedProject);
+      }
+      return { ...prev, projects: nextProjects };
+    });
+  }, [mutate, currentUser]);
+
   // ── Keyboard Shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
     function handleKeyDown(e) {
@@ -585,6 +596,7 @@ export default function App() {
 
           <div style={{ display: activeTab === 'data' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
             <DataTab
+              project={selectedProject}
               sections={projectSections}
               pmisMap={pmisMap}
               selectedSectionId={selectedSectionId}
@@ -594,6 +606,7 @@ export default function App() {
               }}
               onDeleteSection={handleDeleteSection}
               onDeleteSections={handleDeleteSections}
+              onUpdateProject={handleUpdateProject}
               addToast={addToast}
             />
           </div>
