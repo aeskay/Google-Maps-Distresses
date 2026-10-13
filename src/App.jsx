@@ -441,6 +441,31 @@ export default function App() {
     if (selectedSectionId === sectionId) setSelectedSectionId(null);
   }, [selectedProjectId, mutate, currentUser, selectedSectionId]);
 
+  const handleDeleteSections = useCallback((sectionIds) => {
+    if (!selectedProjectId || !Array.isArray(sectionIds) || sectionIds.length === 0) return;
+    const toDeleteSet = new Set(sectionIds);
+    mutate(prev => {
+      const nextProjects = prev.projects.map(p => {
+        if (p.id !== selectedProjectId) return p;
+        return {
+          ...p,
+          sections: (p.sections || []).filter(s => !toDeleteSet.has(s.id)),
+        };
+      });
+
+      if (currentUser) {
+        const updated = nextProjects.find(p => p.id === selectedProjectId);
+        if (updated) saveUserProject(currentUser.uid, updated);
+      }
+
+      return { ...prev, projects: nextProjects };
+    });
+
+    if (selectedSectionId && toDeleteSet.has(selectedSectionId)) {
+      setSelectedSectionId(null);
+    }
+  }, [selectedProjectId, mutate, currentUser, selectedSectionId]);
+
   // ── Keyboard Shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
     function handleKeyDown(e) {
@@ -567,6 +592,9 @@ export default function App() {
                 handleSelectSection(id);
                 setActiveTab('map');
               }}
+              onDeleteSection={handleDeleteSection}
+              onDeleteSections={handleDeleteSections}
+              addToast={addToast}
             />
           </div>
         </div>

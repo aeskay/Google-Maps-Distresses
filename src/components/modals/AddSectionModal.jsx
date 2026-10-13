@@ -38,6 +38,11 @@ export default function AddSectionModal({
   const [beginRef, setBeginRef] = useState(initialData?.beginRef ?? '');
   const [endRef, setEndRef] = useState(initialData?.endRef ?? '');
   const [csj, setCsj] = useState(initialData?.csj || '');
+  const [slabThickness, setSlabThickness] = useState(initialData?.slabThickness || '');
+  const [baseType, setBaseType] = useState(initialData?.baseType || '');
+  const [baseThickness, setBaseThickness] = useState(initialData?.baseThickness || '');
+  const [subgradeType, setSubgradeType] = useState(initialData?.subgradeType || '');
+  const [subgradeThickness, setSubgradeThickness] = useState(initialData?.subgradeThickness || '');
 
   // GPS Coordinates inputs
   const initialGpsStartStr = initialData?.coordinates?.begin
@@ -128,6 +133,11 @@ export default function AddSectionModal({
       beginRef: b,
       endRef: eRef,
       csj: csj.trim() || null,
+      slabThickness: slabThickness.trim() || null,
+      baseType: baseType.trim() || null,
+      baseThickness: baseThickness.trim() || null,
+      subgradeType: subgradeType.trim() || null,
+      subgradeThickness: subgradeThickness.trim() || null,
       gpsStart: gpsStartInput.trim() || null,
       gpsEnd: gpsEndInput.trim() || null,
       coordinates,
@@ -205,7 +215,7 @@ export default function AddSectionModal({
               </div>
 
               <div className="form-group">
-                <label className="form-label">County (Optional)</label>
+                <label className="form-label">County</label>
                 <input
                   className="form-input"
                   value={countyName}
@@ -243,6 +253,73 @@ export default function AddSectionModal({
               </div>
             </div>
 
+            {/* Pavement Design & Structure */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="form-group">
+                <label className="form-label">Slab Thickness</label>
+                <input
+                  className="form-input"
+                  value={slabThickness}
+                  onChange={e => setSlabThickness(e.target.value)}
+                  placeholder="e.g. 10.0 in"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Base Type</label>
+                <input
+                  className="form-input"
+                  value={baseType}
+                  onChange={e => setBaseType(e.target.value)}
+                  placeholder="e.g. Asphalt Treated Base"
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="form-group">
+                <label className="form-label">Base Thickness</label>
+                <input
+                  className="form-input"
+                  value={baseThickness}
+                  onChange={e => setBaseThickness(e.target.value)}
+                  placeholder="e.g. 4.0 in"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Subgrade Type</label>
+                <input
+                  className="form-input"
+                  value={subgradeType}
+                  onChange={e => setSubgradeType(e.target.value)}
+                  placeholder="e.g. Lime Stabilized Subgrade"
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="form-group">
+                <label className="form-label">Subgrade Thickness</label>
+                <input
+                  className="form-input"
+                  value={subgradeThickness}
+                  onChange={e => setSubgradeThickness(e.target.value)}
+                  placeholder="e.g. 6.0 in"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">CSJ</label>
+                <input
+                  className="form-input"
+                  value={csj}
+                  onChange={e => setCsj(e.target.value)}
+                  placeholder="e.g. 0123-04-056"
+                />
+              </div>
+            </div>
+
             {/* GPS Coordinates Section */}
             <div style={{
               background: 'var(--bg-elevated)',
@@ -251,11 +328,8 @@ export default function AddSectionModal({
               border: '1px solid var(--border-default)',
               marginBottom: 14,
             }}>
-              <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', marginBottom: 4 }}>
-                📍 GPS Coordinates (Optional)
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
-                If you leave these blank, you can auto-generate them anytime via the TxDOT GIS API.
+              <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', marginBottom: 8 }}>
+                📍 GPS Coordinates
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -279,16 +353,6 @@ export default function AddSectionModal({
                   />
                 </div>
               </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">CSJ (Optional)</label>
-              <input
-                className="form-input"
-                value={csj}
-                onChange={e => setCsj(e.target.value)}
-                placeholder="e.g. 0123-04-056"
-              />
             </div>
           </div>
 

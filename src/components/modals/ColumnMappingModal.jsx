@@ -15,9 +15,14 @@ const REQUIRED_FIELDS = [
 ];
 
 const OPTIONAL_FIELDS = [
-  { appKey: 'countyName', label: 'County', hint: 'County name (e.g. "Harris")' },
-  { appKey: 'csj',        label: 'CSJ',    hint: 'Control Section Job (e.g. 0123-04-056)' },
-  { appKey: 'sn',         label: 'S/N',    hint: 'Section Number' },
+  { appKey: 'countyName',        label: 'County',             hint: 'County name (e.g. "Harris")' },
+  { appKey: 'csj',               label: 'CSJ',                hint: 'Control Section Job (e.g. 0123-04-056)' },
+  { appKey: 'sn',                label: 'S/N',                hint: 'Section Number' },
+  { appKey: 'slabThickness',     label: 'Slab Thickness',     hint: 'Slab thickness (e.g. 10.0 in)' },
+  { appKey: 'baseType',          label: 'Base Type',          hint: 'Base type / material (e.g. ATB)' },
+  { appKey: 'baseThickness',     label: 'Base Thickness',     hint: 'Base thickness (e.g. 4.0 in)' },
+  { appKey: 'subgradeType',      label: 'Subgrade Type',      hint: 'Subgrade material / treatment' },
+  { appKey: 'subgradeThickness', label: 'Subgrade Thickness', hint: 'Subgrade thickness (e.g. 6.0 in)' },
 ];
 
 const GPS_FIELDS = [
@@ -38,6 +43,11 @@ const SUGGEST_MAP = {
   countyName: ['county', 'county name', 'cnty'],
   csj:      ['csj', 'csj number', 'control section job', 'control section', 'job number'],
   sn:       ['s/n', 'sn', 'section number', 'sec no'],
+  slabThickness: ['slab thickness', 'slab_thickness', 'slab thk', 'pavement thickness', 'pvmt thickness', 'slab depth', 'slab'],
+  baseType: ['base type', 'base_type', 'base material', 'base', 'type of base'],
+  baseThickness: ['base thickness', 'base_thickness', 'base thk', 'base depth'],
+  subgradeType: ['subgrade type', 'subgrade_type', 'subgrade material', 'subgrade', 'sub-grade type', 'subgrade treatment'],
+  subgradeThickness: ['subgrade thickness', 'subgrade_thickness', 'subgrade thk', 'subgrade depth', 'sub-grade thickness'],
   gpsStart: ['gps start', 'start gps', 'begin gps', 'gps begin', 'start coord', 'start lat lon', 'gps start r', 'gps start l', 'start r', 'start l'],
   gpsEnd:   ['gps end', 'end gps', 'ending gps', 'end coord', 'end lat lon', 'gps end r', 'gps end l', 'end r', 'end l'],
   startLat: ['start lat', 'beg lat', 'begin lat', 'latitude start', 'from lat'],
@@ -97,6 +107,11 @@ export default function ColumnMappingModal({
         return col ? row[col] : undefined;
       };
 
+      const getTrimmed = (key) => {
+        const v = getVal(key);
+        return v !== undefined && v !== null && String(v).trim() ? String(v).trim() : null;
+      };
+
       // Resolve Start Coordinate (combined or separate)
       let startCoord = parseCombinedCoord(getVal('gpsStart'));
       if (!startCoord) {
@@ -138,6 +153,11 @@ export default function ColumnMappingModal({
         endRef: parseFloat(getVal('endRef')) || 0,
         csj: String(getVal('csj') || '').trim() || null,
         sn: String(getVal('sn') || '').trim() || null,
+        slabThickness: getTrimmed('slabThickness'),
+        baseType: getTrimmed('baseType'),
+        baseThickness: getTrimmed('baseThickness'),
+        subgradeType: getTrimmed('subgradeType'),
+        subgradeThickness: getTrimmed('subgradeThickness'),
         gpsStart: startCoord ? `${startCoord[0]}, ${startCoord[1]}` : null,
         gpsEnd: endCoord ? `${endCoord[0]}, ${endCoord[1]}` : null,
         coordinates,
@@ -191,7 +211,7 @@ export default function ColumnMappingModal({
               ))}
 
               <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-primary)', marginTop: 16, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Optional Section Fields
+                Section & Pavement Fields
               </div>
               {OPTIONAL_FIELDS.map(f => (
                 <div key={f.appKey} className="form-group" style={{ marginBottom: 10 }}>
