@@ -43,11 +43,11 @@ const SUGGEST_MAP = {
   countyName: ['county', 'county name', 'cnty'],
   csj:      ['csj', 'csj number', 'control section job', 'control section', 'job number'],
   sn:       ['s/n', 'sn', 'section number', 'sec no'],
-  slabThickness: ['slab thickness', 'slab_thickness', 'slab thk', 'pavement thickness', 'pvmt thickness', 'slab depth', 'slab'],
-  baseType: ['base type', 'base_type', 'base material', 'base', 'type of base'],
-  baseThickness: ['base thickness', 'base_thickness', 'base thk', 'base depth'],
-  subgradeType: ['subgrade type', 'subgrade_type', 'subgrade material', 'subgrade', 'sub-grade type', 'subgrade treatment'],
-  subgradeThickness: ['subgrade thickness', 'subgrade_thickness', 'subgrade thk', 'subgrade depth', 'sub-grade thickness'],
+  slabThickness: ['slab thickness', 'slab_thickness', 'slab thk', 'slab thick', 'pavement thickness', 'pvmt thickness', 'slab depth', 'slab', 'thickness', 'slab (in)', 'slab in', 'pcc thick', 'pcc thickness', 'pcc depth', 'crcp thickness', 'crcp thk'],
+  baseType: ['base type', 'base_type', 'base material', 'base mat', 'base', 'type of base', 'base description', 'base desc'],
+  baseThickness: ['base thickness', 'base_thickness', 'base thk', 'base thick', 'base depth', 'base (in)', 'base in'],
+  subgradeType: ['subgrade type', 'subgrade_type', 'subgrade material', 'subgrade', 'sub-grade type', 'subgrade treatment', 'subgrade desc', 'subgrade description'],
+  subgradeThickness: ['subgrade thickness', 'subgrade_thickness', 'subgrade thk', 'subgrade thick', 'subgrade depth', 'sub-grade thickness', 'subgrade (in)', 'subgrade in'],
   gpsStart: ['gps start', 'start gps', 'begin gps', 'gps begin', 'start coord', 'start lat lon', 'gps start r', 'gps start l', 'start r', 'start l'],
   gpsEnd:   ['gps end', 'end gps', 'ending gps', 'end coord', 'end lat lon', 'gps end r', 'gps end l', 'end r', 'end l'],
   startLat: ['start lat', 'beg lat', 'begin lat', 'latitude start', 'from lat'],
@@ -58,9 +58,13 @@ const SUGGEST_MAP = {
 
 function autoSuggest(appKey, headers) {
   const patterns = SUGGEST_MAP[appKey] || [];
-  const norm = s => String(s).toLowerCase().trim().replace(/[_\s]+/g, ' ');
+  const norm = s => String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ');
   for (const p of patterns) {
-    const found = headers.find(h => norm(h) === p || norm(h).includes(p));
+    const np = norm(p);
+    const found = headers.find(h => {
+      const nh = norm(h);
+      return nh === np || nh.startsWith(np) || nh.includes(np);
+    });
     if (found) return found;
   }
   return '';
@@ -215,8 +219,13 @@ export default function ColumnMappingModal({
               </div>
               {OPTIONAL_FIELDS.map(f => (
                 <div key={f.appKey} className="form-group" style={{ marginBottom: 10 }}>
-                  <label className="form-label">
+                  <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>{f.label}</span>
+                    {previewRow[mappings[f.appKey]] !== undefined && previewRow[mappings[f.appKey]] !== '' && (
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                        {String(previewRow[mappings[f.appKey]]).slice(0, 18)}
+                      </span>
+                    )}
                   </label>
                   <select
                     className="form-select"

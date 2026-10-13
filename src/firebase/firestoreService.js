@@ -52,6 +52,7 @@ function sanitizeProject(project) {
   return {
     id: project.id,
     name: project.name || 'Untitled Project',
+    visibleColumns: Array.isArray(project.visibleColumns) ? project.visibleColumns : null,
     updatedAt: serverTimestamp(),
     sections: Array.isArray(project.sections)
       ? project.sections.map(s => {
@@ -66,6 +67,13 @@ function sanitizeProject(project) {
             endRef: s.endRef ?? 0,
             csj: s.csj || null,
             sn: s.sn || null,
+            slabThickness: s.slabThickness || null,
+            baseType: s.baseType || null,
+            baseThickness: s.baseThickness || null,
+            subgradeType: s.subgradeType || null,
+            subgradeThickness: s.subgradeThickness || null,
+            gpsStart: s.gpsStart || null,
+            gpsEnd: s.gpsEnd || null,
             coordinates,
             coordinatesJson,
             captures: Array.isArray(s.captures)
@@ -80,6 +88,9 @@ function sanitizeProject(project) {
                   fov: c.fov ?? 90,
                   distanceFromStartMiles: c.distanceFromStartMiles ?? 0,
                   capturedAt: c.capturedAt || new Date().toISOString(),
+                  imageDate: c.imageDate || null,
+                  imageYear: c.imageYear || null,
+                  panoId: c.panoId || null,
                   imageUrl: c.imageUrl || null,
                   notes: c.notes || '',
                 }))
@@ -104,6 +115,7 @@ export function subscribeToUserProjects(userId, onUpdate, onError) {
         return {
           id: d.id,
           name: data.name || 'Untitled Project',
+          visibleColumns: Array.isArray(data.visibleColumns) ? data.visibleColumns : null,
           sections: Array.isArray(data.sections)
             ? data.sections.map(s => ({
                 ...s,

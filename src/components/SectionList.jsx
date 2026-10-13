@@ -53,6 +53,7 @@ export default function SectionList({
       Papa.parse(text, {
         header: true,
         skipEmptyLines: true,
+        transformHeader: h => (h ? h.trim() : ''),
         complete: ({ data, meta }) => {
           setCsvHeaders(meta.fields || []);
           setCsvRows(data);
