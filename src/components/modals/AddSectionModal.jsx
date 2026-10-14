@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { TXDOT_DISTRICT_NAMES } from '../../utils/normalizers';
-import { haversineDistanceMiles } from '../../utils/txdotGisApi';
+import { haversineDistanceMiles, fetchCoordinatesForSection } from '../../utils/txdotGisApi';
 
 const DISTRICT_OPTIONS = Array.from(new Set(Object.values(TXDOT_DISTRICT_NAMES))).sort();
 
@@ -56,8 +56,50 @@ export default function AddSectionModal({
   const [gpsEndInput, setGpsEndInput] = useState(initialGpsEndStr);
 
   const [error, setError] = useState('');
+  const [isResolvingTxdot, setIsResolvingTxdot] = useState(false);
+  const [txdotResolvedInfo, setTxdotResolvedInfo] = useState(null);
+  const [resolvedCoordinates, setResolvedCoordinates] = useState(initialData?.coordinates || null);
 
-  function handleSubmit(e) {
+  async function handleFetchFromTxdot() {
+    setError('');
+    setTxdotResolvedInfo(null);
+    const b = parseFloat(beginRef);
+    const eRef = parseFloat(endRef);
+    if (isNaN(b) || isNaN(eRef)) {
+      setError('Please enter valid Begin and End Reference Markers.');
+      return;
+    }
+    if (!highway.trim()) {
+      setError('Highway is required to fetch TxDOT coordinates.');
+      return;
+    }
+    setIsResolvingTxdot(true);
+    try {
+      const res = await fetchCoordinatesForSection({
+        highway: highway.trim().toUpperCase(),
+        district: district.trim(),
+        countyName: countyName.trim() || null,
+        beginRef: b,
+        endRef: eRef,
+      }, { forceRefresh: true });
+
+      if (res.status === 'success' && res.begin && res.end) {
+        setGpsStartInput(`${res.begin[0].toFixed(6)}, ${res.begin[1].toFixed(6)}`);
+        setGpsEndInput(`${res.end[0].toFixed(6)}, ${res.end[1].toFixed(6)}`);
+        setResolvedCoordinates(res);
+        const curvePoints = Array.isArray(res.path) ? res.path.length : 2;
+        setTxdotResolvedInfo(`✓ Resolved from TxDOT: ${curvePoints} road curve points (${res.lengthMiles || 0} mi)`);
+      } else {
+        setError(res.error || 'Could not resolve coordinates from TxDOT for this marker range.');
+      }
+    } catch (err) {
+      setError(`Failed to fetch from TxDOT: ${err.message}`);
+    } finally {
+      setIsResolvingTxdot(false);
+    }
+  }
+
+  async function handleSubmit(e) {
     e.preventDefault();
     setError('');
 
@@ -84,10 +126,38 @@ export default function AddSectionModal({
       return;
     }
 
-    // Process GPS coordinates if provided
-    const startCoord = parseCoordString(gpsStartInput);
-    const endCoord = parseCoordString(gpsEndInput);
+    const rmOrHwyChanged = isEditing && (
+      parseFloat(beginRef) !== parseFloat(initialData?.beginRef) ||
+      parseFloat(endRef) !== parseFloat(initialData?.endRef) ||
+      highway.trim().toUpperCase() !== String(initialData?.highway || '').trim().toUpperCase() ||
+      district.trim().toLowerCase() !== String(initialData?.district || '').trim().toLowerCase()
+    );
 
+    let coordinates = resolvedCoordinates;
+    let startCoord = parseCoordString(gpsStartInput);
+    let endCoord = parseCoordString(gpsEndInput);
+
+    // If RM or highway changed and user didn't explicitly fetch new coordinates:
+    if (rmOrHwyChanged && (!coordinates || coordinates === initialData?.coordinates)) {
+      try {
+        const fresh = await fetchCoordinatesForSection({
+          highway: highway.trim().toUpperCase(),
+          district: district.trim(),
+          countyName: countyName.trim() || null,
+          beginRef: b,
+          endRef: eRef,
+        }, { forceRefresh: true });
+        if (fresh && fresh.status === 'success' && fresh.begin && fresh.end) {
+          coordinates = fresh;
+          startCoord = fresh.begin;
+          endCoord = fresh.end;
+        }
+      } catch (err) {
+        console.warn('Auto-resolve from TxDOT during submit failed:', err);
+      }
+    }
+
+    // Process GPS coordinates if provided
     if (gpsStartInput.trim() && !startCoord) {
       setError('GPS Start format is invalid. Expected format: "latitude, longitude" (e.g. 29.7110, -95.2112)');
       return;
@@ -97,30 +167,30 @@ export default function AddSectionModal({
       return;
     }
 
-    let coordinates = initialData?.coordinates || null;
-
-    if (startCoord && endCoord) {
-      const lengthMi = Number(haversineDistanceMiles(startCoord[0], startCoord[1], endCoord[0], endCoord[1]).toFixed(3));
-      coordinates = {
-        status: 'success',
-        available: true,
-        source: 'manual',
-        timestamp: new Date().toISOString(),
-        begin: startCoord,
-        end: endCoord,
-        path: [startCoord, endCoord],
-        lengthMiles: lengthMi,
-      };
-    } else if (startCoord && !endCoord) {
-      coordinates = {
-        status: 'partial',
-        available: true,
-        source: 'manual',
-        begin: startCoord,
-        end: null,
-        path: [startCoord],
-        lengthMiles: 0,
-      };
+    if (!coordinates) {
+      if (startCoord && endCoord) {
+        const lengthMi = Number(haversineDistanceMiles(startCoord[0], startCoord[1], endCoord[0], endCoord[1]).toFixed(3));
+        coordinates = {
+          status: 'success',
+          available: true,
+          source: 'manual',
+          timestamp: new Date().toISOString(),
+          begin: startCoord,
+          end: endCoord,
+          path: [startCoord, endCoord],
+          lengthMiles: lengthMi,
+        };
+      } else if (startCoord && !endCoord) {
+        coordinates = {
+          status: 'partial',
+          available: true,
+          source: 'manual',
+          begin: startCoord,
+          end: null,
+          path: [startCoord],
+          lengthMiles: 0,
+        };
+      }
     }
 
     const payload = {
@@ -328,9 +398,26 @@ export default function AddSectionModal({
               border: '1px solid var(--border-default)',
               marginBottom: 14,
             }}>
-              <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', marginBottom: 8 }}>
-                📍 GPS Coordinates
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <span style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)' }}>
+                  📍 GPS Coordinates & Highway Path
+                </span>
+                <button
+                  type="button"
+                  className="btn btn--secondary btn--sm"
+                  onClick={handleFetchFromTxdot}
+                  disabled={isResolvingTxdot}
+                  title="Query TxDOT GIS API to automatically fetch GPS coordinates and the full curved highway path"
+                >
+                  {isResolvingTxdot ? '⏳ Querying TxDOT...' : '⚡ Fetch from TxDOT GIS'}
+                </button>
               </div>
+
+              {txdotResolvedInfo && (
+                <div style={{ color: '#059669', fontSize: 11, marginBottom: 10, fontWeight: 600 }}>
+                  {txdotResolvedInfo}
+                </div>
+              )}
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div>
