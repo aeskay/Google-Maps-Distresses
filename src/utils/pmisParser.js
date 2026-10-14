@@ -102,17 +102,31 @@ export function parsePmisCSV(csvText, { onProgress } = {}) {
           iri: parseFloat(row[colMap.iri]) || null,
           punchouts: parseFloat(row[colMap.punchouts]) || 0,
           acpPatches: parseFloat(row[colMap.acpPatches]) || 0,
+          startRef: beginTrm + beginDisp,
           pccPatches: parseFloat(row[colMap.pccPatches]) || 0,
           spalled: parseFloat(row[colMap.spalled]) || 0,
+          spalledCracks: parseFloat(row[colMap.spalled]) || 0,
+          punchout: parseFloat(row[colMap.punchouts]) || 0,
           aadt: parseFloat(row[colMap.aadt]) || null,
         };
 
-        // Group by `${district}|${parsedHwy.paddedRoute} ${roadbed}`
-        const primaryKey = `${district.toLowerCase()}|${parsedHwy.paddedRoute} ${roadbed}`.toUpperCase();
-        if (!pmisMap.has(primaryKey)) {
-          pmisMap.set(primaryKey, []);
+        // Group by both standard padded key and compact key
+        const distKey = district.toUpperCase().replace(/[\s-]+/g, '');
+        const cleanNum = parseInt(parsedHwy.number, 10);
+        const compactBase = `${parsedHwy.prefix}${cleanNum}`;
+
+        const keysToSet = [
+          `${distKey}|${parsedHwy.paddedRoute} ${roadbed}`,
+          `${distKey}|${compactBase}${roadbed}`,
+          `${distKey}|${compactBase}`,
+        ];
+
+        for (const k of keysToSet) {
+          if (!pmisMap.has(k)) {
+            pmisMap.set(k, []);
+          }
+          pmisMap.get(k).push(record);
         }
-        pmisMap.get(primaryKey).push(record);
       },
 
       complete: () => {

@@ -115,3 +115,32 @@ export function normalizeHighway(raw) {
   if (!parsed) return String(raw || '').trim().toUpperCase();
   return `${parsed.paddedRoute} ${parsed.roadbed}`;
 }
+
+export function cleanDistrictKey(val) {
+  if (val === null || val === undefined) return '';
+  let s = String(val).toUpperCase().trim();
+  s = s.replace(/^[0-9\s-]+/, ''); // remove leading numbers and dashes
+  s = s.replace(/\s+/g, '');        // remove all internal spaces
+  return s;
+}
+
+export function parseHighwayComponents(highwayStr) {
+  if (!highwayStr) return { base: '', explicitSuffix: '' };
+  const clean = String(highwayStr).toUpperCase().replace(/[\s-_]/g, '');
+  const match = clean.match(/^([A-Z]+)0*(\d+)(K\([RL]\)|[A-Z]*)$/);
+  if (match) {
+    let suffix = match[3] || '';
+    if (suffix === 'RG') suffix = 'R';
+    else if (suffix === 'LG') suffix = 'L';
+    else if (suffix === 'KG') suffix = 'K';
+    const base = `${match[1]}${parseInt(match[2], 10)}`;
+    return {
+      base,
+      explicitSuffix: suffix,
+    };
+  }
+  return {
+    base: clean,
+    explicitSuffix: '',
+  };
+}

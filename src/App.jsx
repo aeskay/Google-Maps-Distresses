@@ -9,6 +9,7 @@ import { get, set } from 'idb-keyval';
 import Topbar from './components/Topbar';
 import Sidebar from './components/Sidebar';
 import MapTab from './components/tabs/MapTab';
+import ConditionTab from './components/tabs/ConditionTab';
 import CapturesTab from './components/tabs/CapturesTab';
 import DataTab from './components/tabs/DataTab';
 import ToastContainer from './components/ToastContainer';
@@ -30,9 +31,10 @@ import { createBlankState, createDefaultProject } from './utils/projectStore';
 import { hydrateSectionsWithCachedCoordinates, batchGenerateCoordinates } from './utils/txdotGisApi';
 
 const TABS = [
-  { id: 'map',      label: 'Map & Street View', icon: '🗺️' },
-  { id: 'captures', label: 'Captures',          icon: '📸' },
-  { id: 'data',     label: 'Data Table',        icon: '📋' },
+  { id: 'map',       label: 'Map & Street View', icon: '🗺️' },
+  { id: 'condition', label: 'Condition',         icon: '📊' },
+  { id: 'captures',  label: 'Captures',          icon: '📸' },
+  { id: 'data',      label: 'Data Table',        icon: '📋' },
 ];
 
 const WORKING_STATE_KEY = 'txdot-distress:working-state';
@@ -627,6 +629,15 @@ export default function App() {
               addToast={addToast}
               activeTab={activeTab}
               focusSectionTrigger={focusSectionTrigger}
+            />
+          </div>
+
+          <div style={{ display: activeTab === 'condition' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+            <ConditionTab
+              section={selectedSection}
+              pmisMap={pmisMap}
+              pmisLoading={pmisLoading}
+              pmisProgress={pmisProgress}
             />
           </div>
 
