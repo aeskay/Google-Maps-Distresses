@@ -32,8 +32,8 @@ import { hydrateSectionsWithCachedCoordinates, batchGenerateCoordinates } from '
 
 const TABS = [
   { id: 'map',       label: 'Map & Street View', icon: '🗺️' },
-  { id: 'condition', label: 'Condition',         icon: '📊' },
   { id: 'captures',  label: 'Captures',          icon: '📸' },
+  { id: 'condition', label: 'Condition',         icon: '📊' },
   { id: 'data',      label: 'Data Table',        icon: '📋' },
 ];
 
@@ -632,15 +632,6 @@ export default function App() {
             />
           </div>
 
-          <div style={{ display: activeTab === 'condition' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
-            <ConditionTab
-              section={selectedSection}
-              pmisMap={pmisMap}
-              pmisLoading={pmisLoading}
-              pmisProgress={pmisProgress}
-            />
-          </div>
-
           <div style={{ display: activeTab === 'captures' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
             <CapturesTab
               project={selectedProject}
@@ -649,6 +640,15 @@ export default function App() {
               onSelectSection={handleSelectSection}
               onUpdateSection={handleUpdateSection}
               addToast={addToast}
+            />
+          </div>
+
+          <div style={{ display: activeTab === 'condition' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+            <ConditionTab
+              section={selectedSection}
+              pmisMap={pmisMap}
+              pmisLoading={pmisLoading}
+              pmisProgress={pmisProgress}
             />
           </div>
 
