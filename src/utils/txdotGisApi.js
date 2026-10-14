@@ -624,36 +624,56 @@ export async function hydrateSectionsWithCachedCoordinates(sections) {
 
 /**
  * Batch generate coordinates for sections that do not yet have valid coordinates or full road curves.
+ * Supports concurrent requests and real-time chunk streaming so maps update live.
  */
-export async function batchGenerateCoordinates(sections, onProgress = null, { forceUpgradeCurves = false } = {}) {
+export async function batchGenerateCoordinates(
+  sections,
+  onProgress = null,
+  { forceUpgradeCurves = false, concurrency = 4, onBatchChunk = null } = {}
+) {
   if (!Array.isArray(sections) || sections.length === 0) return [];
-  const results = [];
-  const total = sections.length;
+  const results = [...sections];
+  const toProcess = [];
 
-  for (let i = 0; i < total; i++) {
-    const section = sections[i];
-    const hasCurvedPath = section.coordinates?.status === 'success' &&
-                          Array.isArray(section.coordinates?.path) &&
-                          section.coordinates.path.length > 2;
+  for (let i = 0; i < sections.length; i++) {
+    const s = sections[i];
+    const hasCurvedPath = s.coordinates?.status === 'success' &&
+                          Array.isArray(s.coordinates?.path) &&
+                          s.coordinates.path.length > 2;
 
-    // Skip only if it already has valid coordinates AND already has a curved road path (unless forced)
-    if (!forceUpgradeCurves && hasCurvedPath) {
-      results.push(section);
-      continue;
+    if (forceUpgradeCurves || !hasCurvedPath) {
+      toProcess.push({ index: i, section: s });
     }
+  }
 
-    if (onProgress) {
-      onProgress({ current: i + 1, total, sectionId: section.id, highway: section.highway });
-    }
+  if (toProcess.length === 0) return sections;
 
-    try {
-      const coords = await fetchCoordinatesForSection(section, { forceRefresh: true });
-      results.push({ ...section, coordinates: coords });
-    } catch (err) {
-      results.push({
-        ...section,
-        coordinates: { status: 'error', error: err.message, timestamp: new Date().toISOString() },
-      });
+  let completed = 0;
+
+  for (let i = 0; i < toProcess.length; i += concurrency) {
+    const chunk = toProcess.slice(i, i + concurrency);
+    await Promise.all(
+      chunk.map(async ({ index, section }) => {
+        try {
+          const coords = await fetchCoordinatesForSection(section, { forceRefresh: true });
+          if (coords && coords.status === 'success' && Array.isArray(coords.path) && coords.path.length > 2) {
+            results[index] = { ...section, coordinates: coords };
+          } else if (!section.coordinates || section.coordinates.status !== 'success') {
+            results[index] = { ...section, coordinates: coords };
+          }
+        } catch (err) {
+          console.warn(`Failed to resolve coordinates for ${section.id}:`, err);
+        } finally {
+          completed++;
+          if (onProgress) {
+            onProgress({ current: completed, total: toProcess.length, sectionId: section.id });
+          }
+        }
+      })
+    );
+
+    if (onBatchChunk) {
+      onBatchChunk([...results]);
     }
   }
 

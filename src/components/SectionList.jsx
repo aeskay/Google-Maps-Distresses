@@ -92,36 +92,7 @@ export default function SectionList({
     }
   }
 
-  async function handleBatchCurveRoads() {
-    const straightSections = sections.filter(s =>
-      s.coordinates?.status === 'success' && (!Array.isArray(s.coordinates?.path) || s.coordinates.path.length <= 2)
-    );
-    if (straightSections.length === 0 && unmappedCount === 0) {
-      addToast('info', 'Roads Already Curved', 'All sections already have full road curvature.');
-      return;
-    }
-
-    setIsGeneratingGps(true);
-    setGpsProgress({ current: 0, total: straightSections.length || unmappedCount });
-    try {
-      const updated = await batchGenerateCoordinates(sections, (prog) => {
-        setGpsProgress(prog);
-      }, { forceUpgradeCurves: true });
-      onBatchUpdateSections(updated);
-      const curvedCount = updated.filter(s => s.coordinates?.status === 'success' && s.coordinates.path?.length > 2).length;
-      addToast('success', 'Road Curves Loaded', `${curvedCount} section(s) updated with TxDOT road curves.`);
-    } catch (err) {
-      addToast('error', 'Geometry Upgrade Failed', err.message);
-    } finally {
-      setIsGeneratingGps(false);
-      setGpsProgress(null);
-    }
-  }
-
   const unmappedCount = sections.filter(s => !s.coordinates || s.coordinates.status !== 'success').length;
-  const straightLineCount = sections.filter(s =>
-    s.coordinates?.status === 'success' && (!Array.isArray(s.coordinates?.path) || s.coordinates.path.length <= 2)
-  ).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -144,28 +115,11 @@ export default function SectionList({
             <div style={{ fontSize: 10, color: 'var(--accent-warning)', marginTop: 2 }}>
               {unmappedCount} need GPS
             </div>
-          ) : straightLineCount > 0 ? (
-            <div style={{ fontSize: 10, color: '#3b82f6', marginTop: 2 }}>
-              {straightLineCount} straight line(s)
-            </div>
           ) : null}
         </div>
 
         <div style={{ display: 'flex', gap: 6 }}>
-          {straightLineCount > 0 ? (
-            <button
-              className="btn btn--secondary btn--sm"
-              onClick={handleBatchCurveRoads}
-              disabled={isGeneratingGps}
-              title={`Fetch curved TxDOT roadway geometry for ${straightLineCount} section(s)`}
-            >
-              {isGeneratingGps ? (
-                <span>🛣️ {gpsProgress?.current}/{gpsProgress?.total}</span>
-              ) : (
-                <span>🛣️ Curve Roads</span>
-              )}
-            </button>
-          ) : unmappedCount > 0 ? (
+          {unmappedCount > 0 ? (
             <button
               className="btn btn--secondary btn--sm"
               onClick={handleGenerateMissingGps}

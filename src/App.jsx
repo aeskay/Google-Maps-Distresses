@@ -27,7 +27,7 @@ import {
 
 import { parsePmisCSV } from './utils/pmisParser';
 import { createBlankState, createDefaultProject } from './utils/projectStore';
-import { hydrateSectionsWithCachedCoordinates } from './utils/txdotGisApi';
+import { hydrateSectionsWithCachedCoordinates, batchGenerateCoordinates } from './utils/txdotGisApi';
 
 const TABS = [
   { id: 'map',      label: 'Map & Street View', icon: '🗺️' },
@@ -379,6 +379,7 @@ export default function App() {
 
   const handleUpdateSection = useCallback((updatedSection) => {
     if (!selectedProjectId) return;
+    autoCurvingAttemptedRef.current.delete(updatedSection?.id);
     mutate(prev => {
       const nextProjects = prev.projects.map(p => {
         if (p.id !== selectedProjectId) return p;
@@ -476,6 +477,52 @@ export default function App() {
       return { ...prev, projects: nextProjects };
     });
   }, [mutate, currentUser]);
+
+  // ── Automatic Background Roadway Curve Resolution ─────────────────────────
+  const autoCurvingAttemptedRef = useRef(new Set());
+
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    const project = state.projects?.find(p => p.id === selectedProjectId);
+    if (!project || !Array.isArray(project.sections) || project.sections.length === 0) return;
+
+    // Check if any sections lack road curvature or need GPS and have not yet been attempted
+    const toResolve = project.sections.filter(s =>
+      s.highway &&
+      !autoCurvingAttemptedRef.current.has(s.id) &&
+      (!s.coordinates || s.coordinates.status !== 'success' || !Array.isArray(s.coordinates?.path) || s.coordinates.path.length <= 2)
+    );
+
+    if (toResolve.length === 0) return;
+
+    // Mark as attempted so sections without TxDOT coverage don't loop endlessly
+    toResolve.forEach(s => autoCurvingAttemptedRef.current.add(s.id));
+
+    let isCancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        await batchGenerateCoordinates(
+          project.sections,
+          null,
+          {
+            forceUpgradeCurves: true,
+            concurrency: 4,
+            onBatchChunk: (chunkedSections) => {
+              if (isCancelled) return;
+              handleBatchUpdateSections(chunkedSections);
+            },
+          }
+        );
+      } catch (err) {
+        console.warn('Auto background curve resolution error:', err);
+      }
+    }, 400);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [selectedProjectId, state.projects, handleBatchUpdateSections]);
 
   // ── Keyboard Shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
