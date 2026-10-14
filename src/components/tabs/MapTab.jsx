@@ -1142,12 +1142,32 @@ export default function MapTab({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {selectedSection ? (
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: 14 }}>
                 {selectedSection.id} — {selectedSection.highway}
               </span>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                 (RM {selectedSection.beginRef} – {selectedSection.endRef} · {selectedSection.district})
+              </span>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '2px 9px',
+                  borderRadius: 'var(--radius-full, 9999px)',
+                  background: (selectedSection.captures?.length || 0) > 0 ? 'rgba(16, 185, 129, 0.12)' : 'var(--bg-tertiary, #f1f5f9)',
+                  color: (selectedSection.captures?.length || 0) > 0 ? '#059669' : 'var(--text-secondary, #64748b)',
+                  border: (selectedSection.captures?.length || 0) > 0 ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid var(--border-default, #e2e8f0)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+                title={`${selectedSection.captures?.length || 0} distress capture(s) recorded for this section`}
+              >
+                <span>📸</span>
+                <span>
+                  {selectedSection.captures?.length || 0} {(selectedSection.captures?.length || 0) === 1 ? 'capture' : 'captures'}
+                </span>
               </span>
             </div>
           ) : (
@@ -1156,31 +1176,6 @@ export default function MapTab({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Snap to Road button */}
-          {selectedSection?.coordinates?.begin && selectedSection?.coordinates?.end && (
-            <button
-              type="button"
-              className="btn btn--secondary btn--sm"
-              onClick={() => handleSnapSectionToRoad(selectedSection, true)}
-              disabled={isSnappingRoad}
-              title="Snap section path to follow the highway curves using Google Driving Directions"
-            >
-              {isSnappingRoad ? '⏳ Snapping...' : '🛣️ Snap to Road'}
-            </button>
-          )}
-
-          {/* Toggle Capture Panel visibility */}
-          {isStreetViewActive && (
-            <button
-              type="button"
-              className={`btn btn--sm ${isHudCollapsed ? 'btn--primary' : 'btn--secondary'}`}
-              onClick={() => setIsHudCollapsed(!isHudCollapsed)}
-              title="Toggle Distress Capture Panel visibility"
-            >
-              {isHudCollapsed ? '📸 Show Capture' : '📸 Hide Capture'}
-            </button>
-          )}
-
           {/* Layout Toggle */}
           <div className="segmented-group">
             <button
