@@ -116,3 +116,97 @@ export async function fetchImageAsDataUrl(imageUrl) {
     return imageUrl;
   }
 }
+
+let directionsServiceInstance = null;
+const directionsCache = new Map();
+let isDirectionsDenied = false;
+
+export function getIsDirectionsApiDenied() {
+  return isDirectionsDenied;
+}
+
+/**
+ * Fetches the driving road path between beginCoord [lat, lng] and endCoord [lat, lng]
+ * using the Google Maps DirectionsService SDK.
+ * Returns { path: [[lat, lng], ...], lengthMiles: number } or { error: status, isDenied: boolean } or null.
+ */
+export async function fetchDirectionsRoadPath(beginCoord, endCoord) {
+  if (isDirectionsDenied) {
+    return { error: 'REQUEST_DENIED', isDenied: true };
+  }
+
+  if (!beginCoord || !endCoord || !Array.isArray(beginCoord) || !Array.isArray(endCoord)) {
+    return null;
+  }
+  const [bLat, bLng] = beginCoord;
+  const [eLat, eLng] = endCoord;
+  if (typeof bLat !== 'number' || typeof bLng !== 'number' || typeof eLat !== 'number' || typeof eLng !== 'number') {
+    return null;
+  }
+
+  // If start and end are practically identical (< 5 meters)
+  if (Math.abs(bLat - eLat) < 0.00005 && Math.abs(bLng - eLng) < 0.00005) {
+    return { path: [beginCoord, endCoord], lengthMiles: 0 };
+  }
+
+  const cacheKey = `${bLat.toFixed(6)},${bLng.toFixed(6)}->${eLat.toFixed(6)},${eLng.toFixed(6)}`;
+  if (directionsCache.has(cacheKey)) {
+    return directionsCache.get(cacheKey);
+  }
+
+  if (!window.google?.maps?.DirectionsService) {
+    try {
+      await loadGoogleMapsApi();
+    } catch {
+      return null;
+    }
+  }
+
+  if (!window.google?.maps?.DirectionsService) {
+    return null;
+  }
+
+  if (!directionsServiceInstance) {
+    directionsServiceInstance = new window.google.maps.DirectionsService();
+  }
+
+  return new Promise((resolve) => {
+    directionsServiceInstance.route(
+      {
+        origin: new window.google.maps.LatLng(bLat, bLng),
+        destination: new window.google.maps.LatLng(eLat, eLng),
+        travelMode: window.google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === window.google.maps.DirectionsStatus.OK && result?.routes?.[0]?.overview_path) {
+          const route = result.routes[0];
+          const path = route.overview_path.map(pt => [
+            Number(pt.lat().toFixed(6)),
+            Number(pt.lng().toFixed(6)),
+          ]);
+
+          let totalMeters = 0;
+          if (Array.isArray(route.legs)) {
+            route.legs.forEach(leg => {
+              if (leg.distance?.value) totalMeters += leg.distance.value;
+            });
+          }
+          const lengthMiles = totalMeters > 0 ? Number((totalMeters / 1609.344).toFixed(3)) : null;
+
+          const data = { path, lengthMiles };
+          directionsCache.set(cacheKey, data);
+          resolve(data);
+        } else {
+          if (status === 'REQUEST_DENIED') {
+            isDirectionsDenied = true;
+            console.warn('Google Directions API is not enabled on this Google Maps API key (REQUEST_DENIED).');
+            resolve({ error: 'REQUEST_DENIED', isDenied: true });
+          } else {
+            console.warn(`DirectionsService route query ended with status: ${status}`);
+            resolve({ error: status, isDenied: false });
+          }
+        }
+      }
+    );
+  });
+}

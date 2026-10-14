@@ -407,7 +407,7 @@ export async function initGpsCache() {
 }
 
 // ── Main Specific Roadbed Resolver ───────────────────────────────────────────
-export async function fetchCoordinatesForSection(section) {
+export async function fetchCoordinatesForSection(section, { forceRefresh = false } = {}) {
   if (!section || !section.highway) {
     return { status: 'error', error: 'Missing highway information' };
   }
@@ -432,7 +432,7 @@ export async function fetchCoordinatesForSection(section) {
   const keyDist = getSectionGpsKey(section.highway, section.beginRef, section.endRef, '', section.district);
   const cached = memoryGpsCache.get(keyFull) || memoryGpsCache.get(keyDist);
 
-  if (cached && cached.status === 'success' && cached.begin) {
+  if (!forceRefresh && cached && cached.status === 'success' && cached.begin && Array.isArray(cached.path) && cached.path.length > 2) {
     if (!canonicalDist || isCoordinateInDistrict(cached.begin, canonicalDist)) {
       return cached;
     }
@@ -488,7 +488,16 @@ export async function fetchCoordinatesForSection(section) {
 
   // Query Roadway features for this roadbed route
   const targetRouteId = isUndivided ? `${parsed.paddedRoute}-KG` : `${parsed.paddedRoute}-${targetType}`;
-  const roadwayFeatures = await fetchRoadwayGeometryForRoute(targetRouteId);
+  let roadwayFeatures = await fetchRoadwayGeometryForRoute(targetRouteId);
+
+  // If specific roadbed has no geometry, fallback to single roadbed (-KG) or alternate
+  if (!roadwayFeatures || roadwayFeatures.length === 0) {
+    roadwayFeatures = await fetchRoadwayGeometryForRoute(`${parsed.paddedRoute}-KG`);
+  }
+  if (!roadwayFeatures || roadwayFeatures.length === 0) {
+    const altType = targetType === 'RG' ? 'LG' : 'RG';
+    roadwayFeatures = await fetchRoadwayGeometryForRoute(`${parsed.paddedRoute}-${altType}`);
+  }
 
   let beginCoord = null;
   let endCoord = null;
@@ -614,17 +623,21 @@ export async function hydrateSectionsWithCachedCoordinates(sections) {
 }
 
 /**
- * Batch generate coordinates for sections that do not yet have valid coordinates.
+ * Batch generate coordinates for sections that do not yet have valid coordinates or full road curves.
  */
-export async function batchGenerateCoordinates(sections, onProgress = null) {
+export async function batchGenerateCoordinates(sections, onProgress = null, { forceUpgradeCurves = false } = {}) {
   if (!Array.isArray(sections) || sections.length === 0) return [];
   const results = [];
   const total = sections.length;
 
   for (let i = 0; i < total; i++) {
     const section = sections[i];
-    // If already has valid coordinates, skip network call!
-    if (section.coordinates?.status === 'success' && section.coordinates.begin) {
+    const hasCurvedPath = section.coordinates?.status === 'success' &&
+                          Array.isArray(section.coordinates?.path) &&
+                          section.coordinates.path.length > 2;
+
+    // Skip only if it already has valid coordinates AND already has a curved road path (unless forced)
+    if (!forceUpgradeCurves && hasCurvedPath) {
       results.push(section);
       continue;
     }
@@ -634,7 +647,7 @@ export async function batchGenerateCoordinates(sections, onProgress = null) {
     }
 
     try {
-      const coords = await fetchCoordinatesForSection(section);
+      const coords = await fetchCoordinatesForSection(section, { forceRefresh: true });
       results.push({ ...section, coordinates: coords });
     } catch (err) {
       results.push({

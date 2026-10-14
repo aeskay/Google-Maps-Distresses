@@ -16,11 +16,14 @@ import {
   getStoredGoogleMapsApiKey,
   getStreetViewStaticUrl,
   fetchImageAsDataUrl,
+  fetchDirectionsRoadPath,
+  getIsDirectionsApiDenied,
 } from '../../utils/googleMapsLoader';
 import {
   calculateDistanceFromStart,
   formatGpsDisplay,
   getGoogleMapsUrl,
+  fetchCoordinatesForSection,
 } from '../../utils/txdotGisApi';
 import {
   getDistressSuggestionsForSection,
@@ -153,10 +156,6 @@ export default function MapTab({
     return set;
   }, [selectedSection?.captures]);
 
-  // Top 3 quick-pick shortcuts
-  const quickPicks = useMemo(() => {
-    return suggestionList.slice(0, 3);
-  }, [suggestionList]);
 
   // Select a distress from dropdown or quick-pick
   const handleSelectDistress = useCallback((distress) => {
@@ -375,6 +374,90 @@ export default function MapTab({
       return () => clearTimeout(timerId);
     }
   }, [selectedSection?.id, selectedSectionId, focusSectionTrigger, focusOnSection, fetchPanoTimeline, getSectionPathCoords, mapInstanceVersion]);
+
+  // ── Snap Section to Road via Google Directions ─────────────────────────────
+  const [isSnappingRoad, setIsSnappingRoad] = useState(false);
+  const attemptedSnappingIdsRef = useRef(new Set());
+
+  const handleSnapSectionToRoad = useCallback(async (sectionToSnap, isManual = false) => {
+    const sec = sectionToSnap || selectedSectionRef.current;
+    if (!sec) return;
+
+    const secId = String(sec.id);
+    if (!isManual && attemptedSnappingIdsRef.current.has(secId)) {
+      return;
+    }
+    attemptedSnappingIdsRef.current.add(secId);
+
+    setIsSnappingRoad(true);
+    try {
+      // 1. Primary: Query official TxDOT ArcGIS Roadways layer for measured roadbed geometry
+      if (sec.highway && typeof sec.beginRef === 'number' && typeof sec.endRef === 'number') {
+        const txdotCoords = await fetchCoordinatesForSection(sec, { forceRefresh: true });
+        if (txdotCoords && txdotCoords.status === 'success' && Array.isArray(txdotCoords.path) && txdotCoords.path.length > 2) {
+          const updatedSection = {
+            ...sec,
+            coordinates: txdotCoords,
+          };
+          onUpdateSection?.(updatedSection);
+          if (isManual) {
+            addToast('success', 'Road Curves Mapped', `Section ${sec.id} highway geometry loaded from TxDOT (${txdotCoords.path.length} curve vertices).`);
+          }
+          return;
+        }
+      }
+
+      // 2. Secondary: Fallback to Google Directions if enabled
+      if (!getIsDirectionsApiDenied() && sec.coordinates?.begin && sec.coordinates?.end) {
+        const roadData = await fetchDirectionsRoadPath(sec.coordinates.begin, sec.coordinates.end);
+        if (roadData && Array.isArray(roadData.path) && roadData.path.length >= 2) {
+          const updatedSection = {
+            ...sec,
+            coordinates: {
+              ...sec.coordinates,
+              status: 'success',
+              path: roadData.path,
+              lengthMiles: roadData.lengthMiles ?? sec.coordinates.lengthMiles,
+              snappedVia: 'google_directions',
+            },
+          };
+          onUpdateSection?.(updatedSection);
+          if (isManual) {
+            addToast('success', 'Snapped to Road', `Section ${sec.id} now traces the highway path via Google Directions.`);
+          }
+          return;
+        }
+      }
+
+      if (isManual) {
+        addToast('warning', 'Geometry Unavailable', 'Could not resolve curved highway geometry for this section range.');
+      }
+    } catch (err) {
+      console.warn('Failed to snap section to road:', err);
+      if (isManual) {
+        addToast('error', 'Snap to Road Failed', err.message);
+      }
+    } finally {
+      setIsSnappingRoad(false);
+    }
+  }, [onUpdateSection, addToast]);
+
+  // Automatically snap selected section to road if it only has a straight 2-point line
+  useEffect(() => {
+    if (!selectedSection) return;
+    const path = selectedSection.coordinates?.path;
+    const isStraightLine = !Array.isArray(path) || path.length <= 2;
+    if (isStraightLine && selectedSection.highway) {
+      handleSnapSectionToRoad(selectedSection, false);
+    }
+  }, [
+    selectedSection?.id,
+    selectedSection?.highway,
+    selectedSection?.beginRef,
+    selectedSection?.endRef,
+    selectedSection?.coordinates?.path,
+    handleSnapSectionToRoad,
+  ]);
 
   // Resize and refocus map when tab becomes active
   useEffect(() => {
@@ -1073,6 +1156,19 @@ export default function MapTab({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Snap to Road button */}
+          {selectedSection?.coordinates?.begin && selectedSection?.coordinates?.end && (
+            <button
+              type="button"
+              className="btn btn--secondary btn--sm"
+              onClick={() => handleSnapSectionToRoad(selectedSection, true)}
+              disabled={isSnappingRoad}
+              title="Snap section path to follow the highway curves using Google Driving Directions"
+            >
+              {isSnappingRoad ? '⏳ Snapping...' : '🛣️ Snap to Road'}
+            </button>
+          )}
+
           {/* Toggle Capture Panel visibility */}
           {isStreetViewActive && (
             <button
@@ -1184,6 +1280,7 @@ export default function MapTab({
             height: '100%',
             position: 'relative',
             display: viewLayout === 'map-only' ? 'none' : 'block',
+            overflow: 'hidden',
           }}
         >
           {/* Dedicated empty DOM container for Google StreetViewPanorama */}
@@ -1239,24 +1336,23 @@ export default function MapTab({
             </div>
           )}
 
-          {/* Bottom-Left Horizontal Date Selector (Separate from capture box, doesn't collapse with it) */}
+          {/* Full-Width Horizontal Historical Date Selector directly at the bottom */}
           {isStreetViewActive && availableDates.length > 0 && (
             <div
               className="date-pills-bar"
               style={{
                 position: 'absolute',
-                bottom: 16,
-                left: 16,
-                width: 'fit-content',
-                maxWidth: isHudCollapsed ? 'calc(100% - 130px)' : 'calc(100% - 440px)',
-                zIndex: 30,
+                bottom: 12,
+                left: 12,
+                right: 12,
+                zIndex: 25,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
                 overflowX: 'auto',
-                padding: '6px 8px',
-                background: 'rgba(15, 23, 42, 0.82)',
-                backdropFilter: 'blur(8px)',
+                padding: '6px 10px',
+                background: 'rgba(15, 23, 42, 0.85)',
+                backdropFilter: 'blur(10px)',
                 border: '1px solid rgba(255, 255, 255, 0.18)',
                 borderRadius: 'var(--radius-full)',
                 boxShadow: 'var(--shadow-modal)',
@@ -1293,66 +1389,81 @@ export default function MapTab({
             </div>
           )}
 
-          {/* Collapsible Distress Capture Side Panel & Floating Toggle */}
+          {/* Slide-out floating trigger docked to the side when capture bar is hidden */}
           {isStreetViewActive && (
-            isHudCollapsed ? (
-              /* Minimized Floating Toggle Pill */
-              <button
-                type="button"
-                className="btn"
-                style={{
-                  position: 'absolute',
-                  bottom: 16,
-                  right: 16,
-                  zIndex: 30,
-                  boxShadow: 'var(--shadow-modal)',
-                  backdropFilter: 'blur(8px)',
-                  background: 'rgba(15, 23, 42, 0.92)',
-                  color: '#ffffff',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                  borderRadius: 'var(--radius-full)',
-                  padding: '6px 14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontWeight: 600,
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease',
-                  whiteSpace: 'nowrap',
-                }}
-                onClick={() => setIsHudCollapsed(false)}
-                title="Open Capture Panel (Spacebar to capture)"
-              >
-                <span>📸</span>
-                <span style={{ color: '#38bdf8', fontWeight: 700 }}>◀ Show</span>
-              </button>
-            ) : (
-              /* Expanded Side-Docked HUD Panel */
+            <button
+              type="button"
+              className="btn"
+              style={{
+                position: 'absolute',
+                bottom: availableDates.length > 0 ? 58 : 12,
+                right: 12,
+                zIndex: 35,
+                boxShadow: 'var(--shadow-modal)',
+                backdropFilter: 'blur(8px)',
+                background: 'rgba(15, 23, 42, 0.92)',
+                color: '#ffffff',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: 'var(--radius-full)',
+                padding: '7px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontWeight: 600,
+                fontSize: 12,
+                cursor: 'pointer',
+                transform: isHudCollapsed ? 'translateX(0)' : 'translateX(calc(100% + 24px))',
+                opacity: isHudCollapsed ? 1 : 0,
+                pointerEvents: isHudCollapsed ? 'auto' : 'none',
+                transition: 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease',
+                whiteSpace: 'nowrap',
+              }}
+              onClick={() => setIsHudCollapsed(false)}
+              title="Open Capture Toolbar (Spacebar to capture)"
+            >
+              <span>📸</span>
+              <span style={{ color: '#38bdf8', fontWeight: 700 }}>◀ Show Capture</span>
+            </button>
+          )}
+
+          {/* Horizontal Capture Bar positioned directly on top of the date box */}
+          {isStreetViewActive && (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: availableDates.length > 0 ? 58 : 12,
+                left: 12,
+                right: 12,
+                zIndex: 30,
+                background: 'rgba(255, 255, 255, 0.96)',
+                backdropFilter: 'blur(10px)',
+                border: '1px solid var(--border-strong)',
+                borderRadius: 'var(--radius-lg, 12px)',
+                padding: '8px 12px',
+                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.18)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                transform: isHudCollapsed ? 'translateX(calc(100% + 24px))' : 'translateX(0)',
+                opacity: isHudCollapsed ? 0 : 1,
+                pointerEvents: isHudCollapsed ? 'none' : 'auto',
+                transition: 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease',
+              }}
+            >
+              {/* Row 1: Header, Active Year, Telemetry, and Hide Button */}
               <div
                 style={{
-                  position: 'absolute',
-                  bottom: 16,
-                  right: 16,
-                  width: 410,
-                  maxWidth: 'calc(100% - 32px)',
-                  maxHeight: 'calc(100% - 32px)',
-                  background: 'rgba(255, 255, 255, 0.98)',
-                  backdropFilter: 'blur(8px)',
-                  border: '1px solid var(--border-strong)',
-                  borderRadius: 'var(--radius-xl)',
-                  padding: 16,
-                  boxShadow: 'var(--shadow-modal)',
-                  zIndex: 30,
                   display: 'flex',
-                  flexDirection: 'column',
-                  gap: 10,
-                  overflowY: 'auto',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  fontSize: 11,
+                  color: 'var(--text-secondary)',
                 }}
               >
-                {/* Header: Title, Active Year Badge, and Hide/Collapse button */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Left: Title + Active Year Badge + Telemetry */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
                       📸 Capture
                     </span>
@@ -1362,8 +1473,8 @@ export default function MapTab({
                           background: '#e0f2fe',
                           color: '#0369a1',
                           border: '1px solid #bae6fd',
-                          borderRadius: 'var(--radius-sm)',
-                          padding: '1px 7px',
+                          borderRadius: 'var(--radius-sm, 4px)',
+                          padding: '1px 6px',
                           fontSize: 11,
                           fontWeight: 700,
                         }}
@@ -1374,28 +1485,10 @@ export default function MapTab({
                     )}
                   </div>
 
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => setIsHudCollapsed(true)}
-                    title="Hide panel so it doesn't block the screen"
-                    style={{
-                      padding: '2px 8px',
-                      fontSize: 11,
-                      color: 'var(--text-secondary)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                    }}
-                  >
-                    <span>Hide</span>
-                    <span>▶</span>
-                  </button>
-                </div>
+                  <span style={{ color: 'var(--border-strong)' }}>|</span>
 
-                {/* Telemetry Bar */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-secondary)' }}>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {/* Telemetry info */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
                     <span>
                       GPS: <strong style={{ color: 'var(--text-primary)' }}>{currentPosition ? `${currentPosition.lat.toFixed(4)}°, ${currentPosition.lng.toFixed(4)}°` : '—'}</strong>
                     </span>
@@ -1408,157 +1501,167 @@ export default function MapTab({
                   </div>
                 </div>
 
-                {/* Autocomplete Combobox Input + Capture Button */}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <div ref={distressComboboxRef} style={{ flex: 1, position: 'relative' }}>
-                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                      <input
-                        className="form-input"
-                        value={distressInput}
-                        onChange={e => {
-                          setDistressInput(e.target.value);
-                          setIsDistressDropdownOpen(true);
-                        }}
-                        onFocus={() => setIsDistressDropdownOpen(true)}
-                        onKeyDown={e => {
-                          if (e.key === 'Escape') {
-                            setIsDistressDropdownOpen(false);
-                          } else if (e.key === 'Enter') {
-                            e.preventDefault();
-                            if (filteredSuggestions.length > 0) {
-                              handleSelectDistress(filteredSuggestions[0]);
-                            } else if (distressInput.trim()) {
-                              handleAddCustomDistress(distressInput.trim());
-                            }
+                {/* Far Right: Hide Button */}
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => setIsHudCollapsed(true)}
+                  title="Slide capture toolbar away to screen edge"
+                  style={{
+                    padding: '2px 8px',
+                    fontSize: 11,
+                    color: 'var(--text-secondary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    flexShrink: 0,
+                  }}
+                >
+                  <span>Hide</span>
+                  <span>▶</span>
+                </button>
+              </div>
+
+              {/* Row 2: Distress Combobox Dropdown + Notes Input + Capture Button */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div ref={distressComboboxRef} style={{ width: 230, minWidth: 180, position: 'relative' }}>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <input
+                      className="form-input"
+                      value={distressInput}
+                      onChange={e => {
+                        setDistressInput(e.target.value);
+                        setIsDistressDropdownOpen(true);
+                      }}
+                      onFocus={() => setIsDistressDropdownOpen(true)}
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') {
+                          setIsDistressDropdownOpen(false);
+                        } else if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (filteredSuggestions.length > 0) {
+                            handleSelectDistress(filteredSuggestions[0]);
+                          } else if (distressInput.trim()) {
+                            handleAddCustomDistress(distressInput.trim());
                           }
-                        }}
-                        placeholder="Type or select CRCP distress..."
-                        style={{ fontWeight: 600, fontSize: 13, height: 38, paddingRight: 28 }}
-                      />
-                      <button
-                        type="button"
-                        tabIndex={-1}
-                        onClick={() => setIsDistressDropdownOpen(prev => !prev)}
-                        style={{
-                          position: 'absolute',
-                          right: 8,
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          color: 'var(--text-muted)',
-                          fontSize: 10,
-                          padding: 4,
-                        }}
-                        title="Toggle distress options dropdown"
-                      >
-                        {isDistressDropdownOpen ? '▲' : '▼'}
-                      </button>
-                    </div>
-
-                    {/* Autocomplete Dropdown Menu */}
-                    {isDistressDropdownOpen && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: 'calc(100% + 4px)',
-                          left: 0,
-                          right: 0,
-                          zIndex: 100,
-                          background: '#ffffff',
-                          border: '1px solid var(--border-strong)',
-                          borderRadius: 'var(--radius-md)',
-                          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
-                          maxHeight: 210,
-                          overflowY: 'auto',
-                        }}
-                      >
-                        {filteredSuggestions.length === 0 && !distressInput.trim() ? (
-                          <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
-                            No matching distresses
-                          </div>
-                        ) : (
-                          filteredSuggestions.map(s => {
-                            const isSelected = distressInput.toLowerCase() === s.toLowerCase();
-                            const isRecent = sectionRecentSet.has(s.toLowerCase());
-                            return (
-                              <div
-                                key={s}
-                                onClick={() => handleSelectDistress(s)}
-                                style={{
-                                  padding: '8px 12px',
-                                  fontSize: 12,
-                                  fontWeight: isSelected ? 700 : 500,
-                                  color: isSelected ? 'var(--accent-primary)' : 'var(--text-primary)',
-                                  background: isSelected ? '#eff6ff' : 'transparent',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'space-between',
-                                  cursor: 'pointer',
-                                  transition: 'background 0.1s ease',
-                                }}
-                                onMouseEnter={e => {
-                                  if (!isSelected) e.currentTarget.style.background = '#f8fafc';
-                                }}
-                                onMouseLeave={e => {
-                                  if (!isSelected) e.currentTarget.style.background = 'transparent';
-                                }}
-                              >
-                                <span>{s}</span>
-                                {isRecent && (
-                                  <span
-                                    style={{
-                                      fontSize: 10,
-                                      background: '#dbeafe',
-                                      color: '#1d4ed8',
-                                      padding: '1px 6px',
-                                      borderRadius: 10,
-                                      fontWeight: 600,
-                                    }}
-                                  >
-                                    ★ Recent
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })
-                        )}
-
-                        {/* Add Custom Distress Option */}
-                        {distressInput.trim() && !hasExactMatch && (
-                          <div
-                            onClick={() => handleAddCustomDistress(distressInput.trim())}
-                            style={{
-                              padding: '8px 12px',
-                              fontSize: 12,
-                              fontWeight: 600,
-                              color: 'var(--accent-primary)',
-                              background: '#f0fdf4',
-                              borderTop: '1px solid var(--border-subtle)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 6,
-                              cursor: 'pointer',
-                            }}
-                            onMouseEnter={e => e.currentTarget.style.background = '#dcfce7'}
-                            onMouseLeave={e => e.currentTarget.style.background = '#f0fdf4'}
-                          >
-                            <span>➕</span>
-                            <span>Add &ldquo;<strong>{distressInput.trim()}</strong>&rdquo;</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                        }
+                      }}
+                      placeholder="Type or select CRCP distress..."
+                      style={{ fontWeight: 600, fontSize: 13, height: 36, paddingRight: 28 }}
+                    />
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      onClick={() => setIsDistressDropdownOpen(prev => !prev)}
+                      style={{
+                        position: 'absolute',
+                        right: 8,
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: 'var(--text-muted)',
+                        fontSize: 10,
+                        padding: 4,
+                      }}
+                      title="Toggle distress options dropdown"
+                    >
+                      {isDistressDropdownOpen ? '▲' : '▼'}
+                    </button>
                   </div>
 
-                  <button
-                    className="btn btn--primary btn--md"
-                    onClick={handleCaptureDistress}
-                    disabled={isCapturing}
-                    style={{ gap: 6, padding: '0 16px', height: 38, fontWeight: 700, whiteSpace: 'nowrap' }}
-                    title="Capture snapshot with active date/year (or press Spacebar)"
-                  >
-                    {isCapturing ? <span className="spinner spinner--white" /> : <span>📸 Capture</span>}
-                  </button>
+                  {/* Autocomplete Dropdown Menu (opens upward so it's never cut off) */}
+                  {isDistressDropdownOpen && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: 'calc(100% + 4px)',
+                        left: 0,
+                        right: 0,
+                        zIndex: 100,
+                        background: '#ffffff',
+                        border: '1px solid var(--border-strong)',
+                        borderRadius: 'var(--radius-md)',
+                        boxShadow: '0 -8px 25px rgba(0, 0, 0, 0.15), 0 4px 6px rgba(0, 0, 0, 0.05)',
+                        maxHeight: 220,
+                        overflowY: 'auto',
+                      }}
+                    >
+                      {filteredSuggestions.length === 0 && !distressInput.trim() ? (
+                        <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+                          No matching distresses
+                        </div>
+                      ) : (
+                        filteredSuggestions.map(s => {
+                          const isSelected = distressInput.toLowerCase() === s.toLowerCase();
+                          const isRecent = sectionRecentSet.has(s.toLowerCase());
+                          return (
+                            <div
+                              key={s}
+                              onClick={() => handleSelectDistress(s)}
+                              style={{
+                                padding: '7px 12px',
+                                fontSize: 12,
+                                fontWeight: isSelected ? 700 : 500,
+                                color: isSelected ? 'var(--accent-primary)' : 'var(--text-primary)',
+                                background: isSelected ? '#eff6ff' : 'transparent',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                cursor: 'pointer',
+                                transition: 'background 0.1s ease',
+                              }}
+                              onMouseEnter={e => {
+                                if (!isSelected) e.currentTarget.style.background = '#f8fafc';
+                              }}
+                              onMouseLeave={e => {
+                                if (!isSelected) e.currentTarget.style.background = 'transparent';
+                              }}
+                            >
+                              <span>{s}</span>
+                              {isRecent && (
+                                <span
+                                  style={{
+                                    fontSize: 10,
+                                    background: '#dbeafe',
+                                    color: '#1d4ed8',
+                                    padding: '1px 6px',
+                                    borderRadius: 10,
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  ★ Recent
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+
+                      {/* Add Custom Distress Option */}
+                      {distressInput.trim() && !hasExactMatch && (
+                        <div
+                          onClick={() => handleAddCustomDistress(distressInput.trim())}
+                          style={{
+                            padding: '7px 12px',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: 'var(--accent-primary)',
+                            background: '#f0fdf4',
+                            borderTop: '1px solid var(--border-subtle)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            cursor: 'pointer',
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.background = '#dcfce7'}
+                          onMouseLeave={e => e.currentTarget.style.background = '#f0fdf4'}
+                        >
+                          <span>➕</span>
+                          <span>Add &ldquo;<strong>{distressInput.trim()}</strong>&rdquo;</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Optional Inspector Notes */}
@@ -1566,38 +1669,29 @@ export default function MapTab({
                   className="form-input"
                   value={distressNotes}
                   onChange={e => setDistressNotes(e.target.value)}
-                  placeholder="Optional notes / severity (press Spacebar to capture)..."
-                  style={{ fontSize: 11, padding: '5px 10px', height: 30 }}
+                  placeholder="Optional notes / severity..."
+                  style={{ flex: 1, minWidth: 140, fontSize: 12, height: 36 }}
                 />
 
-                {/* Quick-Pick Mini Bar (Only top 3 recents for fast one-tap reuse) */}
-                {quickPicks.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-                    <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>Quick:</span>
-                    {quickPicks.map(qp => {
-                      const isActive = distressInput.toLowerCase() === qp.toLowerCase();
-                      return (
-                        <button
-                          key={qp}
-                          type="button"
-                          className={`btn btn--xs ${isActive ? 'btn--primary' : 'btn--secondary'}`}
-                          onClick={() => handleSelectDistress(qp)}
-                          style={{ padding: '2px 8px', fontSize: 11, borderRadius: 12 }}
-                        >
-                          {qp}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Footer status / tips */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: 'var(--text-muted)', paddingTop: 2 }}>
-                  <span>Tip: Press <strong>Spacebar</strong> to capture</span>
-                  <span>Captured Year: <strong>{currentImageYear || 'Current'}</strong></span>
-                </div>
+                {/* Capture Button */}
+                <button
+                  className="btn btn--primary btn--md"
+                  onClick={handleCaptureDistress}
+                  disabled={isCapturing}
+                  style={{
+                    gap: 6,
+                    padding: '0 18px',
+                    height: 36,
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                  }}
+                  title="Capture snapshot with active date/year (or press Spacebar)"
+                >
+                  {isCapturing ? <span className="spinner spinner--white" /> : <span>📸 Capture</span>}
+                </button>
               </div>
-            )
+            </div>
           )}
         </div>
       </div>
