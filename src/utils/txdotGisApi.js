@@ -793,3 +793,68 @@ export function getGoogleMapsUrl(coord) {
   if (!coord || !Array.isArray(coord) || coord.length < 2) return null;
   return `https://www.google.com/maps/search/?api=1&query=${coord[0]},${coord[1]}`;
 }
+
+/**
+ * Calculates initial compass heading in degrees (0–360) from p1 to p2.
+ */
+export function calculateSegmentHeading(p1, p2) {
+  const lat1 = (p1[0] * Math.PI) / 180;
+  const lat2 = (p2[0] * Math.PI / 180);
+  const dLon = ((p2[1] - p1[1]) * Math.PI) / 180;
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  const brng = (Math.atan2(y, x) * 180) / Math.PI;
+  return Math.round((brng + 360) % 360);
+}
+
+/**
+ * Calculates forward camera heading along the highway at target coordinate.
+ */
+export function calculateHighwayHeadingAtPoint(targetCoord, rawPath, beginCoord) {
+  if (!targetCoord || !Array.isArray(targetCoord) || !rawPath || !Array.isArray(rawPath) || rawPath.length < 2) {
+    return 0;
+  }
+  let path = rawPath;
+  if (beginCoord && Array.isArray(beginCoord)) {
+    const distToFirst = haversineDistanceMiles(beginCoord[0], beginCoord[1], rawPath[0][0], rawPath[0][1]);
+    const distToLast = haversineDistanceMiles(beginCoord[0], beginCoord[1], rawPath[rawPath.length - 1][0], rawPath[rawPath.length - 1][1]);
+    if (distToLast < distToFirst) {
+      path = [...rawPath].reverse();
+    }
+  }
+
+  const [tLat, tLon] = targetCoord;
+  let minPerpDistance = Infinity;
+  let bestHeading = 0;
+
+  for (let i = 0; i < path.length - 1; i++) {
+    const p1 = path[i];
+    const p2 = path[i + 1];
+    const segLen = haversineDistanceMiles(p1[0], p1[1], p2[0], p2[1]);
+    if (segLen === 0) continue;
+
+    const midLatRad = ((p1[0] + p2[0]) / 2) * (Math.PI / 180);
+    const cosLat = Math.cos(midLatRad);
+
+    const vX = (p2[1] - p1[1]) * cosLat;
+    const vY = p2[0] - p1[0];
+    const vLenSq = vX * vX + vY * vY;
+
+    let t = 0;
+    if (vLenSq > 0) {
+      const pX = (tLon - p1[1]) * cosLat;
+      const pY = tLat - p1[0];
+      t = (pX * vX + pY * vY) / vLenSq;
+    }
+    const clampedT = Math.max(0, Math.min(1, t));
+    const projLat = p1[0] + clampedT * (p2[0] - p1[0]);
+    const projLon = p1[1] + clampedT * (p2[1] - p1[1]);
+
+    const perpDist = haversineDistanceMiles(tLat, tLon, projLat, projLon);
+    if (perpDist < minPerpDistance) {
+      minPerpDistance = perpDist;
+      bestHeading = calculateSegmentHeading(p1, p2);
+    }
+  }
+  return bestHeading;
+}

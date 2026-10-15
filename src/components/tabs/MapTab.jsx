@@ -24,6 +24,7 @@ import {
   formatGpsDisplay,
   getGoogleMapsUrl,
   fetchCoordinatesForSection,
+  calculateHighwayHeadingAtPoint,
 } from '../../utils/txdotGisApi';
 import {
   getDistressSuggestionsForSection,
@@ -63,6 +64,7 @@ export default function MapTab({
   const currentLocationMarkerRef = useRef(null);
   const currentLocationDotRef = useRef(null);
   const splitContainerRef = useRef(null);
+  const clickedMapLocationRef = useRef(null);
 
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const [mapsError, setMapsError] = useState(null);
@@ -349,6 +351,16 @@ export default function MapTab({
   useEffect(() => {
     const sec = selectedSectionRef.current;
     if (!sec) return;
+
+    // Check if this trigger was initiated by clicking a specific point on the map or blue line
+    const clickedLocation = clickedMapLocationRef.current;
+    clickedMapLocationRef.current = null; // consume
+
+    if (clickedLocation) {
+      // The user clicked a specific point on the map or blue line.
+      // Do NOT reset Street View to the beginning of the section!
+      return;
+    }
 
     const path = getSectionPathCoords(sec);
     if (path.length > 0) {
@@ -657,9 +669,25 @@ export default function MapTab({
       // Map click: jump Street View to clicked location if nearby imagery exists
       map.addListener('click', (e) => {
         if (e.latLng && panoramaInstance.current && streetViewServiceRef.current) {
-          streetViewServiceRef.current.getPanorama({ location: e.latLng, radius: 80 }, (data, status) => {
+          clickedMapLocationRef.current = e.latLng;
+          const lat = typeof e.latLng.lat === 'function' ? e.latLng.lat() : e.latLng.lat;
+          const lng = typeof e.latLng.lng === 'function' ? e.latLng.lng() : e.latLng.lng;
+          let fwdHeading = null;
+          const sec = selectedSectionRef.current;
+          if (sec) {
+            const rawPath = getSectionPathCoords(sec);
+            if (rawPath.length >= 2) {
+              fwdHeading = calculateHighwayHeadingAtPoint([lat, lng], rawPath, sec.coordinates?.begin);
+            }
+          }
+
+          streetViewServiceRef.current.getPanorama({ location: e.latLng, radius: 100 }, (data, status) => {
             if (status === 'OK' && data?.location?.latLng) {
+              suppressMapPanUntilRef.current = Date.now() + 1800;
               panoramaInstance.current.setPosition(data.location.latLng);
+              if (fwdHeading !== null) {
+                panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
+              }
               panoramaInstance.current.setVisible(true);
               setIsStreetViewActive(true);
               if (viewLayoutRef.current === 'map-only') {
@@ -736,16 +764,38 @@ export default function MapTab({
       });
 
       polyline.addListener('click', (e) => {
+        if (!e.latLng) return;
+        clickedMapLocationRef.current = e.latLng;
         onSelectSection(sec.id);
-        if (e.latLng && panoramaInstance.current) {
-          suppressMapPanUntilRef.current = Date.now() + 1800;
-          panoramaInstance.current.setPosition(e.latLng);
-          panoramaInstance.current.setVisible(true);
-          setIsStreetViewActive(true);
-          if (viewLayoutRef.current === 'map-only') {
-            setViewLayout('split');
+
+        if (panoramaInstance.current) {
+          const lat = typeof e.latLng.lat === 'function' ? e.latLng.lat() : e.latLng.lat;
+          const lng = typeof e.latLng.lng === 'function' ? e.latLng.lng() : e.latLng.lng;
+          const fwdHeading = calculateHighwayHeadingAtPoint([lat, lng], rawPath, sec.coordinates?.begin);
+
+          const applyStreetView = (pos, panoId = null) => {
+            suppressMapPanUntilRef.current = Date.now() + 1800;
+            panoramaInstance.current.setPosition(pos);
+            panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
+            panoramaInstance.current.setVisible(true);
+            setIsStreetViewActive(true);
+            if (viewLayoutRef.current === 'map-only') {
+              setViewLayout('split');
+            }
+            fetchPanoTimeline(panoId, pos);
+          };
+
+          if (streetViewServiceRef.current) {
+            streetViewServiceRef.current.getPanorama({ location: e.latLng, radius: 100 }, (data, status) => {
+              if (status === 'OK' && data?.location?.latLng) {
+                applyStreetView(data.location.latLng, data.location.pano);
+              } else {
+                applyStreetView(e.latLng, null);
+              }
+            });
+          } else {
+            applyStreetView(e.latLng, null);
           }
-          fetchPanoTimeline(null, e.latLng);
         }
       });
 
