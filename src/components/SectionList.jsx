@@ -7,7 +7,7 @@ import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import ColumnMappingModal from './modals/ColumnMappingModal';
 import AddSectionModal from './modals/AddSectionModal';
-import { parseSpecificHighway } from '../utils/normalizers';
+import { parseSpecificHighway, formatDistrictDisplay, formatSlabThicknessDisplay } from '../utils/normalizers';
 import { batchGenerateCoordinates } from '../utils/txdotGisApi';
 
 export default function SectionList({
@@ -184,7 +184,8 @@ export default function SectionList({
                       {typeof section.beginRef === 'number' ? section.beginRef.toFixed(1) : section.beginRef}
                       –
                       {typeof section.endRef === 'number' ? section.endRef.toFixed(1) : section.endRef} mi
-                      {section.district ? ` · ${section.district}` : ''}
+                      {section.district ? ` · ${formatDistrictDisplay(section.district)}` : ''}
+                      {section.slabThickness ? ` · ${formatSlabThicknessDisplay(section.slabThickness)}` : ''}
                     </div>
                   </div>
                 </div>

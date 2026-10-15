@@ -144,3 +144,45 @@ export function parseHighwayComponents(highwayStr) {
     explicitSuffix: '',
   };
 }
+
+/**
+ * Strips leading numbers and separators from a district string for clean UI display.
+ * E.g.:
+ *   "19 - ATLANTA"  -> "ATLANTA"
+ *   "19-ATLANTA"   -> "ATLANTA"
+ *   "01 - PARIS"   -> "PARIS"
+ *   "19"           -> "ATLANTA"
+ *   "Atlanta"      -> "Atlanta"
+ */
+export function formatDistrictDisplay(raw) {
+  if (raw === null || raw === undefined) return '';
+  const str = String(raw).trim();
+  if (!str) return '';
+
+  // Remove leading numbers followed by hyphens, dashes, colons, or whitespace
+  const stripped = str.replace(/^[0-9]+\s*[-–—:]*\s*/, '').trim();
+  if (stripped && !/^\d+$/.test(stripped)) {
+    return stripped;
+  }
+
+  // If the raw input was only a number (e.g. "19" or "01"), resolve to canonical district name
+  const canonical = cleanDistrictString(str);
+  if (canonical) {
+    return canonical.toUpperCase();
+  }
+  return str;
+}
+
+/**
+ * Formats slab thickness for UI display (e.g. "10" -> "10 in", "10.0 in" -> "10.0 in").
+ */
+export function formatSlabThicknessDisplay(val) {
+  if (val === null || val === undefined) return '';
+  const str = String(val).trim();
+  if (!str) return '';
+  if (/^[0-9]+(\.[0-9]+)?$/.test(str)) {
+    return `${str} in`;
+  }
+  return str;
+}
+

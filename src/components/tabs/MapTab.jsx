@@ -32,6 +32,10 @@ import {
   saveCustomDistressType,
   CRCP_DISTRESS_TYPES,
 } from '../../utils/distressPresets';
+import {
+  formatDistrictDisplay,
+  formatSlabThicknessDisplay,
+} from '../../utils/normalizers';
 import CaptureDetailModal from '../modals/CaptureDetailModal';
 
 export default function MapTab({
@@ -1244,7 +1248,9 @@ export default function MapTab({
                 {selectedSection.id} — {selectedSection.highway}
               </span>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                (RM {selectedSection.beginRef} – {selectedSection.endRef} · {selectedSection.district})
+                (RM {selectedSection.beginRef} – {selectedSection.endRef}
+                {selectedSection.district ? ` · ${formatDistrictDisplay(selectedSection.district)}` : ''}
+                {selectedSection.slabThickness ? ` · Slab: ${formatSlabThicknessDisplay(selectedSection.slabThickness)}` : ''})
               </span>
               <span
                 style={{

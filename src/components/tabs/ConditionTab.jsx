@@ -6,7 +6,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import PlotlyChart from '../PlotlyChart';
 import { buildEvalData, buildDistressData, parseHighwayComponents } from '../../utils/chartBuilder';
-import { cleanDistrictString, normalizeHighway } from '../../utils/normalizers';
+import { cleanDistrictString, normalizeHighway, formatDistrictDisplay, formatSlabThicknessDisplay } from '../../utils/normalizers';
 import { cleanDistrictKey } from '../../utils/chartBuilder';
 import { exportSectionToExcel } from '../../utils/excelExporter';
 
@@ -462,7 +462,10 @@ export default function ConditionTab({ section, pmisMap, pmisLoading, pmisProgre
         <InfoCard label="ID"        value={section.id} />
         <InfoCard label="S/N"       value={section.sn} />
         <InfoCard label="Highway"   value={section.highway} accent="var(--accent-primary)" />
-        <InfoCard label="District"  value={section.district} />
+        <InfoCard label="District"  value={formatDistrictDisplay(section.district)} />
+        {section.slabThickness && (
+          <InfoCard label="Slab Thk" value={formatSlabThicknessDisplay(section.slabThickness)} accent="var(--accent-primary)" />
+        )}
         <InfoCard label="Begin Ref" value={typeof section.beginRef === 'number' ? section.beginRef.toFixed(3) : section.beginRef} />
         <InfoCard label="End Ref"   value={typeof section.endRef   === 'number' ? section.endRef.toFixed(3)   : section.endRef} />
         <InfoCard label="Yr. Const."  value={section.yearConstructed} accent="#10b981" />

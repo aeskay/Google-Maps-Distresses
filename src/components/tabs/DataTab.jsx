@@ -4,6 +4,7 @@
  * GPS resolution status, distress capture counts, batch deletion, and project-persisted column filtering.
  */
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { formatDistrictDisplay, formatSlabThicknessDisplay } from '../../utils/normalizers';
 
 const COLUMN_DEFS = [
   { id: 'id',                label: 'ID',                 alwaysVisible: true },
@@ -466,7 +467,7 @@ export default function DataTab({
                     )}
                     {visibleColumns.has('district') && (
                       <td style={{ padding: '8px 14px', whiteSpace: 'nowrap' }}>
-                        {s.district}
+                        {formatDistrictDisplay(s.district) || '—'}
                       </td>
                     )}
                     {visibleColumns.has('county') && (
@@ -481,7 +482,7 @@ export default function DataTab({
                     )}
                     {visibleColumns.has('slabThickness') && (
                       <td style={{ padding: '8px 14px', color: s.slabThickness ? 'var(--text-primary)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                        {s.slabThickness || '—'}
+                        {formatSlabThicknessDisplay(s.slabThickness) || '—'}
                       </td>
                     )}
                     {visibleColumns.has('baseType') && (
