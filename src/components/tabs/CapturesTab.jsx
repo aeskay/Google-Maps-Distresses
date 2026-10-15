@@ -2,7 +2,7 @@
  * CapturesTab.jsx
  * Gallery and inspection log for all recorded distress captures.
  */
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { downloadCapturesCSV, downloadCapturesZip } from '../../utils/projectStore';
 import CaptureDetailModal from '../modals/CaptureDetailModal';
 
@@ -14,12 +14,19 @@ export default function CapturesTab({
   onUpdateSection,
   addToast,
 }) {
-  const [filterSectionId, setFilterSectionId] = useState('all');
+  const [filterSectionId, setFilterSectionId] = useState(selectedSectionId || 'all');
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState('gallery'); // 'gallery' | 'table'
   const [inspectCapture, setInspectCapture] = useState(null);
   const [isZipping, setIsZipping] = useState(false);
   const [zipProgress, setZipProgress] = useState(null);
+
+  // Automatically update filter when selectedSectionId changes
+  useEffect(() => {
+    if (selectedSectionId) {
+      setFilterSectionId(selectedSectionId);
+    }
+  }, [selectedSectionId]);
 
   // Flatten all captures with section metadata
   const allCaptures = useMemo(() => {
@@ -90,7 +97,9 @@ export default function CapturesTab({
             Distress Captures Gallery
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
-            {totalCaptures} total distress captures recorded across {sections.length} sections
+            {filterSectionId === 'all'
+              ? `${totalCaptures} total distress captures recorded across ${sections.length} sections`
+              : `${filteredCaptures.length} distress capture${filteredCaptures.length === 1 ? '' : 's'} recorded for Section ${filterSectionId} (${totalCaptures} total across project)`}
           </div>
         </div>
 
@@ -130,14 +139,20 @@ export default function CapturesTab({
           {/* Section filter */}
           <select
             className="form-select"
-            style={{ width: 220 }}
+            style={{ width: 240 }}
             value={filterSectionId}
-            onChange={e => setFilterSectionId(e.target.value)}
+            onChange={e => {
+              const val = e.target.value;
+              setFilterSectionId(val);
+              if (val !== 'all' && onSelectSection) {
+                onSelectSection(val, false);
+              }
+            }}
           >
-            <option value="all">All Sections ({allCaptures.length} captures)</option>
+            <option value="all">🌐 All Sections ({allCaptures.length} captures)</option>
             {sections.map(s => (
               <option key={s.id} value={s.id}>
-                {s.id} — {s.highway} ({s.captures?.length || 0})
+                Section {s.id} — {s.highway} ({s.captures?.length || 0})
               </option>
             ))}
           </select>
@@ -181,10 +196,22 @@ export default function CapturesTab({
           border: '1px dashed var(--border-default)',
         }}>
           <div style={{ fontSize: 36, marginBottom: 12 }}>📸</div>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>No Captures Found</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 360, margin: '0 auto 16px' }}>
-            Switch to the <strong>Map</strong> tab, enter Google Street View along any section, and click <strong>"Capture Distress"</strong>.
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>
+            {filterSectionId === 'all' ? 'No Captures Found' : `No Captures for Section ${filterSectionId}`}
           </div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 380, margin: '0 auto 16px' }}>
+            {filterSectionId === 'all'
+              ? 'Switch to the Map tab, enter Google Street View along any section, and click "Capture Distress".'
+              : `Section ${filterSectionId} does not have any distress captures yet. Switch to the Map tab to log distresses along this section.`}
+          </div>
+          {filterSectionId !== 'all' && totalCaptures > 0 && (
+            <button
+              className="btn btn--secondary btn--sm"
+              onClick={() => setFilterSectionId('all')}
+            >
+              View All Sections ({totalCaptures} captures)
+            </button>
+          )}
         </div>
       )}
 
