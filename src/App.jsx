@@ -56,9 +56,11 @@ export default function App() {
   const [focusSectionTrigger, setFocusSectionTrigger] = useState(0);
   const [activeTab, setActiveTab] = useState('map');
 
-  const handleSelectSection = useCallback((id) => {
+  const handleSelectSection = useCallback((id, shouldFocus = true) => {
     setSelectedSectionId(id);
-    setFocusSectionTrigger(prev => prev + 1);
+    if (shouldFocus) {
+      setFocusSectionTrigger(prev => prev + 1);
+    }
   }, []);
 
   const [saveStatus, setSaveStatus] = useState(null); // 'saving' | 'saved' | null

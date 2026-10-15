@@ -64,7 +64,8 @@ export default function MapTab({
   const currentLocationMarkerRef = useRef(null);
   const currentLocationDotRef = useRef(null);
   const splitContainerRef = useRef(null);
-  const clickedMapLocationRef = useRef(null);
+  const focusSectionTimerRef = useRef(null);
+  const lastMapClickTimeRef = useRef(0);
 
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const [mapsError, setMapsError] = useState(null);
@@ -352,13 +353,15 @@ export default function MapTab({
     const sec = selectedSectionRef.current;
     if (!sec) return;
 
-    // Check if this trigger was initiated by clicking a specific point on the map or blue line
-    const clickedLocation = clickedMapLocationRef.current;
-    clickedMapLocationRef.current = null; // consume
+    // Clear any previously pending start-jump timer
+    if (focusSectionTimerRef.current) {
+      clearTimeout(focusSectionTimerRef.current);
+      focusSectionTimerRef.current = null;
+    }
 
-    if (clickedLocation) {
-      // The user clicked a specific point on the map or blue line.
-      // Do NOT reset Street View to the beginning of the section!
+    // If the user clicked somewhere on the map or blue line within the last 4 seconds,
+    // NEVER overwrite their position or reset Street View / orange pin to the section start!
+    if (Date.now() - lastMapClickTimeRef.current < 4000) {
       return;
     }
 
@@ -375,7 +378,8 @@ export default function MapTab({
 
       // Defer heavy Street View 3D panorama & timeline network calls by 1 frame
       // so the map canvas paints the blue extent line and red distress pins first
-      const timerId = setTimeout(() => {
+      focusSectionTimerRef.current = setTimeout(() => {
+        if (Date.now() - lastMapClickTimeRef.current < 4000) return;
         if (panoramaInstance.current) {
           suppressMapPanUntilRef.current = Date.now() + 1800;
           panoramaInstance.current.setPosition(pos);
@@ -385,7 +389,12 @@ export default function MapTab({
         }
       }, 40);
 
-      return () => clearTimeout(timerId);
+      return () => {
+        if (focusSectionTimerRef.current) {
+          clearTimeout(focusSectionTimerRef.current);
+          focusSectionTimerRef.current = null;
+        }
+      };
     }
   }, [selectedSection?.id, selectedSectionId, focusSectionTrigger, focusOnSection, fetchPanoTimeline, getSectionPathCoords, mapInstanceVersion]);
 
@@ -669,7 +678,12 @@ export default function MapTab({
       // Map click: jump Street View to clicked location if nearby imagery exists
       map.addListener('click', (e) => {
         if (e.latLng && panoramaInstance.current && streetViewServiceRef.current) {
-          clickedMapLocationRef.current = e.latLng;
+          lastMapClickTimeRef.current = Date.now();
+          if (focusSectionTimerRef.current) {
+            clearTimeout(focusSectionTimerRef.current);
+            focusSectionTimerRef.current = null;
+          }
+
           const lat = typeof e.latLng.lat === 'function' ? e.latLng.lat() : e.latLng.lat;
           const lng = typeof e.latLng.lng === 'function' ? e.latLng.lng() : e.latLng.lng;
           let fwdHeading = null;
@@ -683,7 +697,11 @@ export default function MapTab({
 
           streetViewServiceRef.current.getPanorama({ location: e.latLng, radius: 100 }, (data, status) => {
             if (status === 'OK' && data?.location?.latLng) {
-              suppressMapPanUntilRef.current = Date.now() + 1800;
+              lastMapClickTimeRef.current = Date.now();
+              const snapLat = data.location.latLng.lat();
+              const snapLng = data.location.latLng.lng();
+              setCurrentPosition({ lat: snapLat, lng: snapLng });
+              suppressMapPanUntilRef.current = Date.now() + 2500;
               panoramaInstance.current.setPosition(data.location.latLng);
               if (fwdHeading !== null) {
                 panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
@@ -765,8 +783,15 @@ export default function MapTab({
 
       polyline.addListener('click', (e) => {
         if (!e.latLng) return;
-        clickedMapLocationRef.current = e.latLng;
-        onSelectSection(sec.id);
+        lastMapClickTimeRef.current = Date.now();
+        if (focusSectionTimerRef.current) {
+          clearTimeout(focusSectionTimerRef.current);
+          focusSectionTimerRef.current = null;
+        }
+
+        if (sec.id !== selectedSectionRef.current?.id) {
+          onSelectSection(sec.id, false);
+        }
 
         if (panoramaInstance.current) {
           const lat = typeof e.latLng.lat === 'function' ? e.latLng.lat() : e.latLng.lat;
@@ -774,7 +799,11 @@ export default function MapTab({
           const fwdHeading = calculateHighwayHeadingAtPoint([lat, lng], rawPath, sec.coordinates?.begin);
 
           const applyStreetView = (pos, panoId = null) => {
-            suppressMapPanUntilRef.current = Date.now() + 1800;
+            lastMapClickTimeRef.current = Date.now();
+            suppressMapPanUntilRef.current = Date.now() + 2500;
+            const normLat = typeof pos.lat === 'function' ? pos.lat() : pos.lat;
+            const normLng = typeof pos.lng === 'function' ? pos.lng() : pos.lng;
+            setCurrentPosition({ lat: normLat, lng: normLng });
             panoramaInstance.current.setPosition(pos);
             panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
             panoramaInstance.current.setVisible(true);
