@@ -92,6 +92,8 @@ export default function MapTab({
 
   // Collapsible HUD panel (toggle hide and show)
   const [isHudCollapsed, setIsHudCollapsed] = useState(false);
+  // Street View Road overlays (navigation arrows and street name text on pavement)
+  const [showRoadOverlays, setShowRoadOverlays] = useState(false);
 
   // Distress Input & Autocomplete Combobox in HUD
   const [distressInput, setDistressInput] = useState(CRCP_DISTRESS_TYPES[0]);
@@ -530,6 +532,20 @@ export default function MapTab({
     }
   }, [availableDates]);
 
+  // ── Toggle Street View Road Overlays (Arrows & Street Name Text) ─────────────
+  const handleToggleRoadOverlays = useCallback(() => {
+    setShowRoadOverlays(prev => {
+      const next = !prev;
+      if (panoramaInstance.current) {
+        panoramaInstance.current.setOptions({
+          linksControl: next,
+          showRoadLabels: next,
+        });
+      }
+      return next;
+    });
+  }, []);
+
   // ── Initialize Google Map & Street View Panorama ───────────────────────────
   useEffect(() => {
     if (!mapsLoaded || !mapContainerRef.current || !panoContainerRef.current) return;
@@ -580,7 +596,9 @@ export default function MapTab({
         pov: { heading: 0, pitch: 0 },
         visible: false,
         addressControl: true,
-        linksControl: true,
+        linksControl: false, // Hides navigation chevron arrows on the pavement
+        showRoadLabels: false, // Hides street names painted onto the roadway surface
+        clickToGo: true, // Allows clicking down the highway to navigate smoothly
         panControl: true,
         enableCloseButton: false,
         fullscreenControl: false,
@@ -1282,6 +1300,7 @@ export default function MapTab({
           <div
             key="pano-canvas"
             ref={panoContainerRef}
+            className={!showRoadOverlays ? 'hide-streetview-arrows' : ''}
             style={{ width: '100%', height: '100%' }}
           />
 
@@ -1496,25 +1515,46 @@ export default function MapTab({
                   </div>
                 </div>
 
-                {/* Far Right: Hide Button */}
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => setIsHudCollapsed(true)}
-                  title="Slide capture toolbar away to screen edge"
-                  style={{
-                    padding: '2px 8px',
-                    fontSize: 11,
-                    color: 'var(--text-secondary)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    flexShrink: 0,
-                  }}
-                >
-                  <span>Hide</span>
-                  <span>▶</span>
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {/* Road Overlays Toggle (Arrows & Street Names) */}
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={handleToggleRoadOverlays}
+                    title={showRoadOverlays ? "Hide navigation arrows and street names on pavement" : "Show navigation arrows and street names on pavement"}
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: 11,
+                      color: showRoadOverlays ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span>{showRoadOverlays ? '↗ Arrows & Labels: On' : '↗ Arrows & Labels: Off'}</span>
+                  </button>
+
+                  {/* Far Right: Hide Button */}
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setIsHudCollapsed(true)}
+                    title="Slide capture toolbar away to screen edge"
+                    style={{
+                      padding: '2px 8px',
+                      fontSize: 11,
+                      color: 'var(--text-secondary)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span>Hide</span>
+                    <span>▶</span>
+                  </button>
+                </div>
               </div>
 
               {/* Row 2: Distress Combobox Dropdown + Notes Input + Capture Button */}

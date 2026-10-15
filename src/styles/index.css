@@ -880,3 +880,11 @@ html, body, #root {
   text-align: center;
 }
 
+/* ── Street View Arrow & Label Suppression ──────────────────────────────── */
+.hide-streetview-arrows svg path[aria-label*="Go "],
+.hide-streetview-arrows svg path[cursor="pointer"][role="button"] {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
