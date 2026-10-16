@@ -115,6 +115,17 @@ export default function MapTab({
   // Selected capture for inspector modal
   const [inspectCapture, setInspectCapture] = useState(null);
 
+  // Live polyline hover Reference Marker tooltip
+  const [polylineHover, setPolylineHover] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+    offset: 0,
+    rmDisplay: null,
+    sectionId: '',
+    highway: '',
+  });
+
   // Active section
   const selectedSection = useMemo(
     () => sections.find(s => s.id === selectedSectionId) || sections[0] || null,
@@ -929,6 +940,13 @@ export default function MapTab({
         }
       });
 
+      map.addListener('dragstart', () => {
+        setPolylineHover(prev => (prev.visible ? { ...prev, visible: false } : prev));
+      });
+      map.addListener('zoom_changed', () => {
+        setPolylineHover(prev => (prev.visible ? { ...prev, visible: false } : prev));
+      });
+
       mapDivRef.current = mapContainerRef.current;
       panoDivRef.current = panoContainerRef.current;
       googleMapInstance.current = map;
@@ -1043,6 +1061,40 @@ export default function MapTab({
             applyStreetView(e.latLng, null);
           }
         }
+      });
+
+      // Show live Reference Marker tooltip when hovering along the highway polyline
+      polyline.addListener('mousemove', (e) => {
+        if (!e.latLng) return;
+        const lat = typeof e.latLng.lat === 'function' ? e.latLng.lat() : e.latLng.lat;
+        const lng = typeof e.latLng.lng === 'function' ? e.latLng.lng() : e.latLng.lng;
+
+        const offset = calculateDistanceFromStart([lat, lng], rawPath, sec.coordinates?.begin);
+        const rmData = calculateReferenceMarkerAtOffset(sec, offset);
+
+        const domEvt = e.domEvent;
+        const mapPane = mapDivRef.current || mapContainerRef.current;
+        let x = 0;
+        let y = 0;
+        if (mapPane && domEvt) {
+          const rect = mapPane.getBoundingClientRect();
+          x = domEvt.clientX - rect.left;
+          y = domEvt.clientY - rect.top;
+        }
+
+        setPolylineHover({
+          visible: true,
+          x,
+          y,
+          offset,
+          rmDisplay: rmData?.refMarkerDisplay || (rmData?.refMarker ? `RM ${rmData.refMarker.toFixed(3)}` : null),
+          sectionId: sec.id,
+          highway: sec.highway,
+        });
+      });
+
+      polyline.addListener('mouseout', () => {
+        setPolylineHover(prev => (prev.visible ? { ...prev, visible: false } : prev));
       });
 
       polyMap.set(secId, {
@@ -1631,6 +1683,76 @@ export default function MapTab({
               </button>
             </form>
           </div>
+
+          {/* Live Polyline Hover Reference Marker Tooltip */}
+          {polylineHover.visible && (
+            <div
+              style={{
+                position: 'absolute',
+                left: Math.max(90, Math.min(polylineHover.x, (mapDivRef.current?.clientWidth || 500) - 90)),
+                top: polylineHover.y < 65 ? polylineHover.y + 16 : polylineHover.y - 14,
+                transform: polylineHover.y < 65 ? 'translate(-50%, 0)' : 'translate(-50%, -100%)',
+                zIndex: 60,
+                pointerEvents: 'none',
+                userSelect: 'none',
+                background: 'rgba(15, 23, 42, 0.94)',
+                backdropFilter: 'blur(8px)',
+                border: '1.5px solid #38bdf8',
+                borderRadius: '8px',
+                padding: '5px 12px',
+                boxShadow: '0 6px 20px rgba(0, 0, 0, 0.55), 0 0 12px rgba(56, 189, 248, 0.4)',
+                color: '#ffffff',
+                fontSize: 12,
+                lineHeight: 1.25,
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800 }}>
+                <span style={{ color: '#38bdf8', fontSize: 13 }}>
+                  📍 {polylineHover.rmDisplay || `Offset: +${polylineHover.offset.toFixed(2)} mi`}
+                </span>
+                {polylineHover.rmDisplay && (
+                  <span style={{ color: '#a5f3fc', fontSize: 11, fontWeight: 600 }}>
+                    +{polylineHover.offset.toFixed(2)} mi
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 500 }}>
+                {polylineHover.highway} · Sec {polylineHover.sectionId}
+              </div>
+              {/* Pointer arrow */}
+              <div
+                style={{
+                  position: 'absolute',
+                  ...(polylineHover.y < 65
+                    ? {
+                        top: -6,
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        width: 0,
+                        height: 0,
+                        borderLeft: '6px solid transparent',
+                        borderRight: '6px solid transparent',
+                        borderBottom: '6px solid #38bdf8',
+                      }
+                    : {
+                        bottom: -6,
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        width: 0,
+                        height: 0,
+                        borderLeft: '6px solid transparent',
+                        borderRight: '6px solid transparent',
+                        borderTop: '6px solid #38bdf8',
+                      }),
+                }}
+              />
+            </div>
+          )}
 
           <div
             key="map-canvas"
