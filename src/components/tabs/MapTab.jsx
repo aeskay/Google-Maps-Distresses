@@ -25,6 +25,8 @@ import {
   getGoogleMapsUrl,
   fetchCoordinatesForSection,
   calculateHighwayHeadingAtPoint,
+  calculateReferenceMarkerAtOffset,
+  parseCoordinatesInput,
 } from '../../utils/txdotGisApi';
 import {
   getDistressSuggestionsForSection,
@@ -351,6 +353,129 @@ export default function MapTab({
       googleMapInstance.current.fitBounds(secBounds, 40);
     }
   }, [getSectionPathCoords]);
+
+  // ── Map Coordinate & Place Search ──────────────────────────────────────────
+  const [mapSearchText, setMapSearchText] = useState('');
+  const [isSearchingMap, setIsSearchingMap] = useState(false);
+  const searchMarkerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (searchMarkerRef.current) {
+        searchMarkerRef.current.setMap(null);
+        searchMarkerRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleMapSearch = useCallback((e) => {
+    if (e) e.preventDefault();
+    const query = mapSearchText.trim();
+    if (!query) return;
+
+    if (!googleMapInstance.current || !window.google?.maps) {
+      addToast('warning', 'Map Loading', 'Google Maps is still initializing. Please wait a moment.');
+      return;
+    }
+
+    const gMaps = window.google.maps;
+
+    const applySearchResult = (lat, lng, label) => {
+      // Temporarily mark last map click to prevent auto-reset to section start
+      lastMapClickTimeRef.current = Date.now();
+      suppressMapPanUntilRef.current = Date.now() + 3000;
+
+      googleMapInstance.current.panTo({ lat, lng });
+      googleMapInstance.current.setZoom(17);
+
+      if (searchMarkerRef.current) {
+        searchMarkerRef.current.setMap(null);
+      }
+      searchMarkerRef.current = new gMaps.Marker({
+        position: { lat, lng },
+        map: googleMapInstance.current,
+        title: label || `Target: ${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+        animation: gMaps.Animation.DROP,
+      });
+
+      // Try locating Street View panorama near this location
+      if (streetViewServiceRef.current && panoramaInstance.current) {
+        let fwdHeading = null;
+        const sec = selectedSectionRef.current;
+        if (sec) {
+          const rawPath = getSectionPathCoords(sec);
+          if (rawPath.length >= 2) {
+            fwdHeading = calculateHighwayHeadingAtPoint([lat, lng], rawPath, sec.coordinates?.begin);
+          }
+        }
+
+        streetViewServiceRef.current.getPanorama(
+          { location: { lat, lng }, radius: 100 },
+          (data, status) => {
+            if (status === 'OK' && data?.location?.latLng) {
+              lastMapClickTimeRef.current = Date.now();
+              const snapLat = data.location.latLng.lat();
+              const snapLng = data.location.latLng.lng();
+              setCurrentPosition({ lat: snapLat, lng: snapLng });
+              panoramaInstance.current.setPosition(data.location.latLng);
+              if (fwdHeading !== null) {
+                panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
+              }
+              panoramaInstance.current.setVisible(true);
+              setIsStreetViewActive(true);
+              if (viewLayoutRef.current === 'map-only') {
+                setViewLayout('split');
+              }
+              fetchPanoTimeline(data.location.pano, data.location.latLng);
+              addToast(
+                'success',
+                'Location & Street View Found',
+                `Navigated to ${lat.toFixed(5)}, ${lng.toFixed(5)}.`
+              );
+            } else {
+              addToast(
+                'info',
+                'Map Centered',
+                `Centered map at ${lat.toFixed(5)}, ${lng.toFixed(5)}. (No Street View within 100m)`
+              );
+            }
+          }
+        );
+      } else {
+        addToast('success', 'Map Centered', `Centered map at ${lat.toFixed(5)}, ${lng.toFixed(5)}.`);
+      }
+    };
+
+    // 1. Check if user typed coordinates / Google Maps URL
+    const parsedCoords = parseCoordinatesInput(query);
+    if (parsedCoords) {
+      applySearchResult(parsedCoords.lat, parsedCoords.lng, `Coordinate: ${parsedCoords.lat.toFixed(5)}, ${parsedCoords.lng.toFixed(5)}`);
+      return;
+    }
+
+    // 2. Geocoder fallback for place names / addresses / highway intersections
+    if (gMaps.Geocoder) {
+      setIsSearchingMap(true);
+      const geocoder = new gMaps.Geocoder();
+      geocoder.geocode({ address: query }, (results, status) => {
+        setIsSearchingMap(false);
+        if (status === 'OK' && results && results[0]) {
+          const loc = results[0].geometry.location;
+          const lat = loc.lat();
+          const lng = loc.lng();
+          applySearchResult(lat, lng, results[0].formatted_address);
+        } else {
+          addToast(
+            'warning',
+            'Location Not Found',
+            `Could not find "${query}". Try latitude, longitude coordinates (e.g. 31.89613, -97.0686).`
+          );
+        }
+      });
+    } else {
+      addToast('warning', 'Search Unavailable', 'Geocoder service is unavailable.');
+    }
+  }, [mapSearchText, addToast, fetchPanoTimeline, getSectionPathCoords]);
 
   // Focus map immediately and position Street View when selectedSectionId or focusSectionTrigger changes
   useEffect(() => {
@@ -745,6 +870,11 @@ export default function MapTab({
     setCurrentDistance(dist);
   }, [currentPosition, selectedSection, getSectionPathCoords]);
 
+  // ── Calculate TxDOT Reference Marker at Current Offset ──────────────────────
+  const currentRefMarker = useMemo(() => {
+    return calculateReferenceMarkerAtOffset(selectedSection, currentDistance);
+  }, [selectedSection, currentDistance]);
+
   // ── 1. Maintain Cached Polylines on Map for Project Sections ───────────────
   useEffect(() => {
     if (!googleMapInstance.current || !window.google?.maps) return;
@@ -1136,6 +1266,7 @@ export default function MapTab({
       const dataUrl = await fetchImageAsDataUrl(snapshotUrl);
 
       const effectiveYear = currentImageYear || (currentImageDate ? currentImageDate.slice(0, 4) : '');
+      const refMarkerData = calculateReferenceMarkerAtOffset(selectedSection, currentDistance);
 
       const newCapture = {
         id: uuidv4(),
@@ -1147,6 +1278,8 @@ export default function MapTab({
         pitch: Math.round(currentPov.pitch),
         fov: 90,
         distanceFromStartMiles: currentDistance,
+        refMarker: refMarkerData ? refMarkerData.refMarker : null,
+        refMarkerDisplay: refMarkerData ? refMarkerData.refMarkerDisplay : null,
         capturedAt: new Date().toISOString(),
         imageDate: currentImageDate || '',
         imageYear: effectiveYear,
@@ -1176,7 +1309,7 @@ export default function MapTab({
       addToast(
         'success',
         'Distress Captured!',
-        `${activeType} recorded (${effectiveYear ? `Year: ${effectiveYear}` : 'Current view'}) at +${currentDistance.toFixed(2)} mi.`
+        `${activeType} recorded (${effectiveYear ? `Year: ${effectiveYear}` : 'Current view'}${refMarkerData ? ` • ${refMarkerData.refMarkerDisplay}` : ''}) at +${currentDistance.toFixed(2)} mi.`
       );
       setDistressNotes(''); // clear notes for next capture
     } catch (err) {
@@ -1331,6 +1464,91 @@ export default function MapTab({
             display: viewLayout === 'pano-only' ? 'none' : 'block',
           }}
         >
+          {/* Floating Coordinate & Place Search Bar */}
+          <div
+            style={{
+              position: 'absolute',
+              top: 12,
+              left: 12,
+              zIndex: 20,
+              width: 'min(360px, calc(100% - 24px))',
+              pointerEvents: 'auto',
+            }}
+          >
+            <form
+              onSubmit={handleMapSearch}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                background: 'rgba(15, 23, 42, 0.92)',
+                backdropFilter: 'blur(8px)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '24px',
+                boxShadow: '0 4px 14px rgba(0, 0, 0, 0.35)',
+                padding: '3px 6px 3px 12px',
+                gap: 6,
+              }}
+            >
+              <span style={{ fontSize: 13, opacity: 0.8, pointerEvents: 'none', userSelect: 'none' }}>🔍</span>
+              <input
+                type="text"
+                value={mapSearchText}
+                onChange={(e) => setMapSearchText(e.target.value)}
+                placeholder="Go to coords (lat, lon) or place..."
+                style={{
+                  flex: 1,
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  color: '#f8fafc',
+                  fontSize: 12,
+                  padding: '4px 0',
+                }}
+              />
+              {mapSearchText && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMapSearchText('');
+                    if (searchMarkerRef.current) {
+                      searchMarkerRef.current.setMap(null);
+                      searchMarkerRef.current = null;
+                    }
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    padding: '2px 6px',
+                    fontSize: 12,
+                    lineHeight: 1,
+                  }}
+                  title="Clear search"
+                >
+                  ✕
+                </button>
+              )}
+              <button
+                type="submit"
+                className="btn btn--primary btn--sm"
+                disabled={isSearchingMap || !mapSearchText.trim()}
+                style={{
+                  padding: '3px 10px',
+                  fontSize: 11,
+                  borderRadius: '16px',
+                  height: '24px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  flexShrink: 0,
+                }}
+              >
+                {isSearchingMap ? '...' : 'Go'}
+              </button>
+            </form>
+          </div>
+
           <div
             key="map-canvas"
             ref={mapContainerRef}
@@ -1594,6 +1812,11 @@ export default function MapTab({
                     <span>
                       Offset: <strong style={{ color: 'var(--accent-primary)' }}>+{currentDistance.toFixed(2)} mi</strong>
                     </span>
+                    {currentRefMarker && (
+                      <span title={`TxDOT Reference Marker: ${currentRefMarker.refMarkerDisplay}`}>
+                        RM: <strong style={{ color: '#0284c7' }}>{currentRefMarker.refMarkerDisplay}</strong>
+                      </span>
+                    )}
                     <span>
                       Bearing: <strong style={{ color: 'var(--text-primary)' }}>{Math.round(currentPov.heading)}°</strong>
                     </span>

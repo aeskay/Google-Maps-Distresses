@@ -5,6 +5,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { downloadCapturesCSV, downloadCapturesZip } from '../../utils/projectStore';
 import { exportSectionCapturesToExcel, exportGroupedSectionsSummaryToExcel } from '../../utils/capturesExcelExporter';
+import { calculateReferenceMarkerAtOffset } from '../../utils/txdotGisApi';
 import CaptureDetailModal from '../modals/CaptureDetailModal';
 
 export default function CapturesTab({
@@ -377,6 +378,11 @@ export default function CapturesTab({
 
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                   {c.section?.highway} · RM {c.section?.beginRef}–{c.section?.endRef}
+                  {(c.refMarkerDisplay || calculateReferenceMarkerAtOffset(c.section, c.distanceFromStartMiles)?.refMarkerDisplay) && (
+                    <span style={{ marginLeft: 6, color: '#0284c7', fontWeight: 600 }}>
+                      · {c.refMarkerDisplay || calculateReferenceMarkerAtOffset(c.section, c.distanceFromStartMiles)?.refMarkerDisplay}
+                    </span>
+                  )}
                 </div>
 
                 <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
@@ -422,6 +428,7 @@ export default function CapturesTab({
                 <th style={{ padding: '10px 14px' }}>Section</th>
                 <th style={{ padding: '10px 14px' }}>Highway</th>
                 <th style={{ padding: '10px 14px' }}>Distress Type</th>
+                <th style={{ padding: '10px 14px' }}>Ref Marker (RM)</th>
                 <th style={{ padding: '10px 14px' }}>Imagery Year / Date</th>
                 <th style={{ padding: '10px 14px' }}>Offset from Start</th>
                 <th style={{ padding: '10px 14px' }}>Coordinates</th>
@@ -448,6 +455,9 @@ export default function CapturesTab({
                   <td style={{ padding: '8px 14px', fontWeight: 600 }}>{c.sectionId}</td>
                   <td style={{ padding: '8px 14px' }}>{c.section?.highway}</td>
                   <td style={{ padding: '8px 14px', fontWeight: 600, color: 'var(--accent-primary)' }}>{c.distressType}</td>
+                  <td style={{ padding: '8px 14px', fontWeight: 600, color: '#0284c7' }}>
+                    {c.refMarkerDisplay || calculateReferenceMarkerAtOffset(c.section, c.distanceFromStartMiles)?.refMarkerDisplay || '—'}
+                  </td>
                   <td style={{ padding: '8px 14px', fontWeight: 600, color: '#0284c7' }}>
                     {c.imageYear ? `${c.imageYear} ${c.imageDate ? `(${c.imageDate})` : ''}` : (c.imageDate || '—')}
                   </td>

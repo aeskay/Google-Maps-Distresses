@@ -858,3 +858,77 @@ export function calculateHighwayHeadingAtPoint(targetCoord, rawPath, beginCoord)
   }
   return bestHeading;
 }
+
+/**
+ * Calculates TxDOT Reference Marker for a given distance offset along a section.
+ * Supports both ascending and descending roadbed mileage directions.
+ * Returns { refMarker: number, refMarkerDisplay: string, baseMarker: number, displacement: number }
+ */
+export function calculateReferenceMarkerAtOffset(section, offsetMiles) {
+  if (!section || offsetMiles == null || isNaN(offsetMiles)) return null;
+
+  const beginRef = parseFloat(section.beginRef);
+  const endRef = parseFloat(section.endRef);
+
+  if (isNaN(beginRef)) return null;
+
+  // Determine direction: default ascending if endRef >= beginRef or endRef is unknown
+  const isAscending = isNaN(endRef) || endRef >= beginRef;
+  const rawRm = isAscending ? (beginRef + offsetMiles) : (beginRef - offsetMiles);
+  const refMarker = Number(rawRm.toFixed(3));
+
+  const baseMarker = Math.floor(rawRm);
+  const displacement = Number((rawRm - baseMarker).toFixed(3));
+  const dispSign = displacement >= 0 ? '+' : '';
+  const refMarkerDisplay = `RM ${baseMarker} ${dispSign}${displacement.toFixed(3)}`;
+
+  return {
+    refMarker,
+    baseMarker,
+    displacement,
+    refMarkerDisplay,
+    formatted: `RM ${refMarker.toFixed(3)}`,
+  };
+}
+
+/**
+ * Robust coordinate parsing from text input or Google Maps URL.
+ * Supports "lat, lon", "lat lon", "@lat,lon", and Google Maps URLs.
+ */
+export function parseCoordinatesInput(input) {
+  if (!input || typeof input !== 'string') return null;
+  const str = input.trim();
+
+  // 1. Google Maps URL e.g. https://www.google.com/maps/@31.89613,-97.0686,17z
+  const urlMatch = str.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
+  if (urlMatch) {
+    const lat = parseFloat(urlMatch[1]);
+    const lng = parseFloat(urlMatch[2]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
+  }
+
+  // 2. Comma or space separated coordinates: e.g. "31.89613, -97.06860" or "31.89613 -97.06860"
+  const coordMatch = str.match(/^(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)$/);
+  if (coordMatch) {
+    const lat = parseFloat(coordMatch[1]);
+    const lng = parseFloat(coordMatch[2]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
+  }
+
+  // 3. Labeled coordinates e.g. "Lat: 31.89613, Lon: -97.06860"
+  const labeledMatch = str.match(/lat(?:itude)?[:\s]+(-?\d+(?:\.\d+)?)[,\s]+lon(?:gitude)?[:\s]+(-?\d+(?:\.\d+)?)/i);
+  if (labeledMatch) {
+    const lat = parseFloat(labeledMatch[1]);
+    const lng = parseFloat(labeledMatch[2]);
+    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return { lat, lng };
+    }
+  }
+
+  return null;
+}
+

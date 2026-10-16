@@ -13,6 +13,7 @@
  */
 
 import ExcelJS from 'exceljs/dist/exceljs.min.js';
+import { calculateReferenceMarkerAtOffset } from './txdotGisApi';
 
 /**
  * Builds direct Google Maps 360° Street View URL for a given capture.
@@ -147,6 +148,7 @@ export async function exportSectionCapturesToExcel(section, project, onProgress 
     { header: 'Snapshot', key: 'snapshot', width: 22 },
     { header: 'Street View Link', key: 'link', width: 24 },
     { header: 'Distress Type', key: 'type', width: 24 },
+    { header: 'Reference Marker (RM)', key: 'rm', width: 22 },
     { header: 'Offset from Start', key: 'offset', width: 18 },
     { header: 'Latitude', key: 'lat', width: 14 },
     { header: 'Longitude', key: 'lon', width: 14 },
@@ -184,7 +186,7 @@ export async function exportSectionCapturesToExcel(section, project, onProgress 
   if (captures.length === 0) {
     const emptyRow = worksheet.getRow(5);
     emptyRow.height = 36;
-    worksheet.mergeCells('A5:L5');
+    worksheet.mergeCells('A5:M5');
     const emptyCell = emptyRow.getCell(1);
     emptyCell.value = 'No distress captures have been recorded for this section yet.';
     emptyCell.font = { italic: true, color: { argb: 'FF64748B' } };
@@ -255,41 +257,50 @@ export async function exportSectionCapturesToExcel(section, project, onProgress 
       cellType.font = { bold: true, color: { argb: 'FF0F172A' } };
       cellType.alignment = { vertical: 'middle', horizontal: 'left' };
 
-      // 5. Offset from Start
-      const cellOffset = row.getCell(5);
+      // 5. Reference Marker (RM)
+      const rmData = c.refMarkerDisplay
+        ? { refMarkerDisplay: c.refMarkerDisplay }
+        : calculateReferenceMarkerAtOffset(section, c.distanceFromStartMiles);
+      const cellRm = row.getCell(5);
+      cellRm.value = rmData?.refMarkerDisplay || (c.refMarker != null ? `RM ${Number(c.refMarker).toFixed(3)}` : '—');
+      cellRm.font = { color: { argb: 'FF0284C7' }, bold: true };
+      cellRm.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      // 6. Offset from Start
+      const cellOffset = row.getCell(6);
       cellOffset.value = c.distanceFromStartMiles != null ? `+${Number(c.distanceFromStartMiles).toFixed(2)} mi` : '+0.00 mi';
       cellOffset.font = { color: { argb: 'FF15803D' }, bold: true };
       cellOffset.alignment = { vertical: 'middle', horizontal: 'center' };
 
-      // 6. Latitude
-      const cellLat = row.getCell(6);
+      // 7. Latitude
+      const cellLat = row.getCell(7);
       cellLat.value = c.lat != null ? Number(c.lat) : '';
       cellLat.numFmt = '0.000000';
       cellLat.alignment = { vertical: 'middle', horizontal: 'right' };
 
-      // 7. Longitude
-      const cellLon = row.getCell(7);
+      // 8. Longitude
+      const cellLon = row.getCell(8);
       cellLon.value = c.lon != null ? Number(c.lon) : '';
       cellLon.numFmt = '0.000000';
       cellLon.alignment = { vertical: 'middle', horizontal: 'right' };
 
-      // 8. Camera Heading
-      const cellHeading = row.getCell(8);
+      // 9. Camera Heading
+      const cellHeading = row.getCell(9);
       cellHeading.value = c.heading != null ? `${Math.round(c.heading)}°` : '—';
       cellHeading.alignment = { vertical: 'middle', horizontal: 'center' };
 
-      // 9. Camera Pitch
-      const cellPitch = row.getCell(9);
+      // 10. Camera Pitch
+      const cellPitch = row.getCell(10);
       cellPitch.value = c.pitch != null ? `${Math.round(c.pitch)}°` : '—';
       cellPitch.alignment = { vertical: 'middle', horizontal: 'center' };
 
-      // 10. Imagery Date
-      const cellDate = row.getCell(10);
+      // 11. Imagery Date
+      const cellDate = row.getCell(11);
       cellDate.value = c.imageYear ? `${c.imageYear}${c.imageDate ? ` (${c.imageDate})` : ''}` : (c.imageDate || '—');
       cellDate.alignment = { vertical: 'middle', horizontal: 'center' };
 
-      // 11. Captured Log Date
-      const cellCapAt = row.getCell(11);
+      // 12. Captured Log Date
+      const cellCapAt = row.getCell(12);
       if (c.capturedAt) {
         const d = new Date(c.capturedAt);
         cellCapAt.value = isNaN(d.getTime()) ? c.capturedAt : d.toLocaleString();
@@ -298,14 +309,14 @@ export async function exportSectionCapturesToExcel(section, project, onProgress 
       }
       cellCapAt.alignment = { vertical: 'middle', horizontal: 'center' };
 
-      // 12. Notes
-      const cellNotes = row.getCell(12);
+      // 13. Notes
+      const cellNotes = row.getCell(13);
       cellNotes.value = c.notes || '';
       cellNotes.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
 
       // Zebra striping & subtle grid borders
       const isEven = i % 2 === 1;
-      for (let col = 1; col <= 12; col++) {
+      for (let col = 1; col <= 13; col++) {
         const cCell = row.getCell(col);
         if (isEven && col !== 2) {
           cCell.fill = {
@@ -324,7 +335,7 @@ export async function exportSectionCapturesToExcel(section, project, onProgress 
     // Enable Excel AutoFilter
     worksheet.autoFilter = {
       from: { row: headerRowIndex, column: 1 },
-      to: { row: headerRowIndex + captures.length, column: 12 },
+      to: { row: headerRowIndex + captures.length, column: 13 },
     };
   }
 

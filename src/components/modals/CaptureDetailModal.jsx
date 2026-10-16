@@ -8,6 +8,7 @@ import {
   saveSectionRecentDistressType,
   saveCustomDistressType,
 } from '../../utils/distressPresets';
+import { calculateReferenceMarkerAtOffset } from '../../utils/txdotGisApi';
 
 export default function CaptureDetailModal({
   capture,
@@ -25,6 +26,10 @@ export default function CaptureDetailModal({
     section?.captures || [],
     distressType
   );
+
+  const refMarkerInfo = capture?.refMarkerDisplay
+    ? { refMarkerDisplay: capture.refMarkerDisplay, refMarker: capture.refMarker }
+    : calculateReferenceMarkerAtOffset(section, capture?.distanceFromStartMiles);
 
   if (!capture) return null;
 
@@ -148,6 +153,12 @@ export default function CaptureDetailModal({
                   <span style={{ color: 'var(--text-muted)' }}>Distance from Start:</span>{' '}
                   <strong style={{ color: 'var(--accent-primary)' }}>+{capture.distanceFromStartMiles?.toFixed(3)} mi</strong>
                 </div>
+                {refMarkerInfo?.refMarkerDisplay && (
+                  <div>
+                    <span style={{ color: 'var(--text-muted)' }}>Reference Marker:</span>{' '}
+                    <strong style={{ color: '#0284c7' }}>{refMarkerInfo.refMarkerDisplay}</strong>
+                  </div>
+                )}
                 <div>
                   <span style={{ color: 'var(--text-muted)' }}>Street View Imagery:</span>{' '}
                   <strong style={{ color: 'var(--accent-primary)' }}>{capture.imageDate || 'Current / Unknown'}</strong>
