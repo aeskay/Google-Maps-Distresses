@@ -10,6 +10,7 @@ import Topbar from './components/Topbar';
 import Sidebar from './components/Sidebar';
 import MapTab from './components/tabs/MapTab';
 import ConditionTab from './components/tabs/ConditionTab';
+import HeatmapTab from './components/tabs/HeatmapTab';
 import CapturesTab from './components/tabs/CapturesTab';
 import DataTab from './components/tabs/DataTab';
 import ToastContainer from './components/ToastContainer';
@@ -34,6 +35,7 @@ const TABS = [
   { id: 'map',       label: 'Map & Street View', icon: '🗺️' },
   { id: 'captures',  label: 'Captures',          icon: '📸' },
   { id: 'condition', label: 'Condition',         icon: '📊' },
+  { id: 'heatmap',   label: 'Heatmap',           icon: '🔥' },
   { id: 'data',      label: 'Data Table',        icon: '📋' },
 ];
 
@@ -663,6 +665,15 @@ export default function App() {
 
           <div style={{ display: activeTab === 'condition' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
             <ConditionTab
+              section={selectedSection}
+              pmisMap={pmisMap}
+              pmisLoading={pmisLoading}
+              pmisProgress={pmisProgress}
+            />
+          </div>
+
+          <div style={{ display: activeTab === 'heatmap' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+            <HeatmapTab
               section={selectedSection}
               pmisMap={pmisMap}
               pmisLoading={pmisLoading}
