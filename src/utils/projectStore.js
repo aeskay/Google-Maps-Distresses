@@ -43,7 +43,7 @@ export function generateCapturesCSV(project, sectionId = null) {
     'Distance From Start (mi)',
     'Captured At',
     'Pano ID',
-    'Image URL',
+    'Street View Link',
     'Notes',
   ];
 
@@ -55,6 +55,12 @@ export function generateCapturesCSV(project, sectionId = null) {
   for (const s of sectionsToExport) {
     if (!Array.isArray(s.captures)) continue;
     for (const c of s.captures) {
+      const panoLink = c.panoId
+        ? `https://www.google.com/maps/@?api=1&map_action=pano&pano=${c.panoId}&heading=${c.heading || 0}&pitch=${c.pitch || 0}`
+        : c.lat != null && c.lon != null
+          ? `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lon}&heading=${c.heading || 0}&pitch=${c.pitch || 0}`
+          : '';
+
       rows.push([
         c.id || '',
         s.id || '',
@@ -71,7 +77,7 @@ export function generateCapturesCSV(project, sectionId = null) {
         c.distanceFromStartMiles ?? 0,
         c.capturedAt || '',
         c.panoId || '',
-        c.imageUrl || '',
+        panoLink,
         (c.notes || '').replace(/"/g, '""'),
       ]);
     }

@@ -4,6 +4,7 @@
  */
 import React, { useState, useMemo, useEffect } from 'react';
 import { downloadCapturesCSV, downloadCapturesZip } from '../../utils/projectStore';
+import { exportSectionCapturesToExcel, exportGroupedSectionsSummaryToExcel } from '../../utils/capturesExcelExporter';
 import CaptureDetailModal from '../modals/CaptureDetailModal';
 
 export default function CapturesTab({
@@ -20,6 +21,8 @@ export default function CapturesTab({
   const [inspectCapture, setInspectCapture] = useState(null);
   const [isZipping, setIsZipping] = useState(false);
   const [zipProgress, setZipProgress] = useState(null);
+  const [isExportingSection, setIsExportingSection] = useState(false);
+  const [isExportingSummary, setIsExportingSummary] = useState(false);
 
   // Automatically update filter when selectedSectionId changes
   useEffect(() => {
@@ -69,6 +72,51 @@ export default function CapturesTab({
     addToast('success', 'Capture deleted', 'Distress capture was removed.');
   }
 
+  const activeSection = useMemo(() => {
+    return sections.find(s => s.id === (filterSectionId !== 'all' ? filterSectionId : selectedSectionId)) || sections[0] || null;
+  }, [sections, filterSectionId, selectedSectionId]);
+
+  async function handleExportSectionExcel() {
+    if (!activeSection) {
+      addToast('warning', 'No Section', 'Please select a section to export captures.');
+      return;
+    }
+    const secCaptures = activeSection.captures || [];
+    if (secCaptures.length === 0) {
+      addToast('info', 'No Captures Recorded', `Section ${activeSection.id} does not have any captures to export.`);
+      return;
+    }
+
+    setIsExportingSection(true);
+    try {
+      await exportSectionCapturesToExcel(activeSection, project);
+      addToast('success', 'Excel Export Ready', `Exported captures for Section ${activeSection.id} with embedded photos & Street View links.`);
+    } catch (err) {
+      console.error('Section Excel export error:', err);
+      addToast('error', 'Export Failed', err.message || 'Could not generate Excel spreadsheet.');
+    } finally {
+      setIsExportingSection(false);
+    }
+  }
+
+  async function handleExportGroupedSummaryExcel() {
+    if (!sections || sections.length === 0) {
+      addToast('warning', 'No Sections', 'Project has no sections to export.');
+      return;
+    }
+
+    setIsExportingSummary(true);
+    try {
+      await exportGroupedSectionsSummaryToExcel(project, sections);
+      addToast('success', 'Grouped Summary Ready', 'Exported all sections distress summary with filterable distresses.');
+    } catch (err) {
+      console.error('Summary Excel export error:', err);
+      addToast('error', 'Export Failed', err.message || 'Could not generate summary spreadsheet.');
+    } finally {
+      setIsExportingSummary(false);
+    }
+  }
+
   async function handleExportZip() {
     if (allCaptures.length === 0) {
       addToast('info', 'No Captures', 'There are no captures to export.');
@@ -103,22 +151,47 @@ export default function CapturesTab({
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* 1. Export Selected Section with Embedded Images & Links */}
           <button
             className="btn btn--secondary btn--sm"
-            onClick={() => downloadCapturesCSV(project, filterSectionId === 'all' ? null : filterSectionId)}
-            disabled={filteredCaptures.length === 0}
-            title="Download captures as CSV summary report"
+            onClick={handleExportSectionExcel}
+            disabled={!activeSection || (activeSection.captures?.length || 0) === 0 || isExportingSection}
+            title={`Export Section ${activeSection?.id || ''} captures to Excel with embedded photos & Street View links`}
+            style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}
           >
-            📊 Export CSV
+            <span>📗</span>
+            <span>
+              {isExportingSection
+                ? 'Generating Excel…'
+                : `Export Sec ${activeSection?.id || ''} (${activeSection?.captures?.length || 0})`}
+            </span>
           </button>
+
+          {/* 2. Export Grouped Summary for All Sections (Comma-separated distresses for instant Excel filtering) */}
+          <button
+            className="btn btn--secondary btn--sm"
+            onClick={handleExportGroupedSummaryExcel}
+            disabled={sections.length === 0 || isExportingSummary}
+            title="Export project-wide summary with one row per section and comma-separated recorded distresses"
+            style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            <span>📑</span>
+            <span>{isExportingSummary ? 'Generating Summary…' : 'Grouped Summary (All Sections)'}</span>
+          </button>
+
+          {/* 3. ZIP bundle containing raw JPEG images and report */}
           <button
             className="btn btn--primary btn--sm"
             onClick={handleExportZip}
             disabled={filteredCaptures.length === 0 || isZipping}
-            title="Download all images and CSV report bundled in a ZIP file"
+            title="Download all snapshot image files and report bundled in a ZIP archive"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
           >
-            {isZipping ? <span>📦 Zipping {zipProgress?.current}/{zipProgress?.total}…</span> : <span>📦 Download ZIP Bundle</span>}
+            <span>📦</span>
+            <span>
+              {isZipping ? `Zipping ${zipProgress?.current}/${zipProgress?.total}…` : 'Download ZIP'}
+            </span>
           </button>
         </div>
       </div>
