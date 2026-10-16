@@ -476,6 +476,12 @@ export default function MapTab({
           const lat = loc.lat();
           const lng = loc.lng();
           applySearchResult(lat, lng, results[0].formatted_address);
+        } else if (status === 'REQUEST_DENIED') {
+          addToast(
+            'warning',
+            'Geocoding API Not Enabled',
+            'To search by place name or address, enable "Geocoding API" in your Google Cloud Console. You can search directly by entering coordinates (e.g. 31.89613, -97.0686).'
+          );
         } else {
           addToast(
             'warning',

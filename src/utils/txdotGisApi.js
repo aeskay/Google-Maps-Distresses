@@ -891,42 +891,91 @@ export function calculateReferenceMarkerAtOffset(section, offsetMiles) {
   };
 }
 
+function isValidLatLng(lat, lng) {
+  return typeof lat === 'number' && typeof lng === 'number' &&
+    !isNaN(lat) && !isNaN(lng) &&
+    lat >= -90 && lat <= 90 &&
+    lng >= -180 && lng <= 180;
+}
+
 /**
- * Robust coordinate parsing from text input or Google Maps URL.
- * Supports "lat, lon", "lat lon", "@lat,lon", and Google Maps URLs.
+ * Robust coordinate parsing from text input or Google Maps URLs.
+ * Supports:
+ * - Decimal: "31.89613, -97.0686", "31.89613 -97.0686", "(31.89613, -97.0686)"
+ * - Cardinal / Degrees: "31.89613° N, 97.0686° W", "31.89613N 97.0686W"
+ * - DMS: 31°53'46.1"N 97°04'07.0"W or 31 53 46.1 N, 97 4 7 W
+ * - Google Maps URLs: @lat,lng, query=lat,lng, q=lat,lng
  */
 export function parseCoordinatesInput(input) {
   if (!input || typeof input !== 'string') return null;
-  const str = input.trim();
+  let str = input.trim();
 
-  // 1. Google Maps URL e.g. https://www.google.com/maps/@31.89613,-97.0686,17z
-  const urlMatch = str.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
-  if (urlMatch) {
-    const lat = parseFloat(urlMatch[1]);
-    const lng = parseFloat(urlMatch[2]);
-    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat, lng };
-    }
+  // 1. URLs: check for @lat,lng, query=lat,lng, or q=lat,lng
+  const urlAtMatch = str.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
+  if (urlAtMatch) {
+    const lat = parseFloat(urlAtMatch[1]);
+    const lng = parseFloat(urlAtMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
   }
 
-  // 2. Comma or space separated coordinates: e.g. "31.89613, -97.06860" or "31.89613 -97.06860"
-  const coordMatch = str.match(/^(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)$/);
-  if (coordMatch) {
-    const lat = parseFloat(coordMatch[1]);
-    const lng = parseFloat(coordMatch[2]);
-    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat, lng };
-    }
+  const urlQueryMatch = str.match(/[?&](?:q|query)=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/i);
+  if (urlQueryMatch) {
+    const lat = parseFloat(urlQueryMatch[1]);
+    const lng = parseFloat(urlQueryMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
   }
 
-  // 3. Labeled coordinates e.g. "Lat: 31.89613, Lon: -97.06860"
+  // Strip brackets, parentheses, quotes
+  str = str.replace(/[()[\]"']/g, '').trim();
+
+  // 2. Degrees Minutes Seconds (DMS) e.g. 31°53'46.1"N 97°04'07.0"W
+  const dmsRegex = /(\d+)[°\s]+(\d+)['\s]+(\d+(?:\.\d+)?)["]?\s*([NSEW])\s*[,]?\s*(\d+)[°\s]+(\d+)['\s]+(\d+(?:\.\d+)?)["]?\s*([NSEW])/i;
+  const dmsMatch = str.match(dmsRegex);
+  if (dmsMatch) {
+    let lat = parseInt(dmsMatch[1], 10) + parseInt(dmsMatch[2], 10) / 60 + parseFloat(dmsMatch[3]) / 3600;
+    if (dmsMatch[4].toUpperCase() === 'S') lat = -lat;
+
+    let lng = parseInt(dmsMatch[5], 10) + parseInt(dmsMatch[6], 10) / 60 + parseFloat(dmsMatch[7]) / 3600;
+    if (dmsMatch[8].toUpperCase() === 'W') lng = -lng;
+
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
+
+  // 3. Decimal with Cardinal direction letters (e.g. "31.89613° N, 97.0686° W", "31.89613N, 97.0686W")
+  const cardinalRegex = /(-?\d+(?:\.\d+)?)[°\s]*([NS])\s*[,]?\s*(-?\d+(?:\.\d+)?)[°\s]*([EW])/i;
+  const cardMatch = str.match(cardinalRegex);
+  if (cardMatch) {
+    let lat = parseFloat(cardMatch[1]);
+    if (cardMatch[2].toUpperCase() === 'S' && lat > 0) lat = -lat;
+
+    let lng = parseFloat(cardMatch[3]);
+    if (cardMatch[4].toUpperCase() === 'W' && lng > 0) lng = -lng;
+
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
+
+  // 4. Labeled coordinates e.g. "Lat: 31.89613, Lon: -97.06860"
   const labeledMatch = str.match(/lat(?:itude)?[:\s]+(-?\d+(?:\.\d+)?)[,\s]+lon(?:gitude)?[:\s]+(-?\d+(?:\.\d+)?)/i);
   if (labeledMatch) {
     const lat = parseFloat(labeledMatch[1]);
     const lng = parseFloat(labeledMatch[2]);
-    if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { lat, lng };
-    }
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
+
+  // 5. Standard decimal coordinates e.g. "31.89613, -97.0686" or "31.89613 -97.0686"
+  const standardMatch = str.match(/^(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)$/);
+  if (standardMatch) {
+    const lat = parseFloat(standardMatch[1]);
+    const lng = parseFloat(standardMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
+  }
+
+  // 6. Generic two floating numbers anywhere in string (e.g. "near 31.89613, -97.06860")
+  const twoNumbersMatch = str.match(/(-?\d{1,2}(?:\.\d+)?)[,\s]+(-?\d{1,3}(?:\.\d+)?)/);
+  if (twoNumbersMatch) {
+    const lat = parseFloat(twoNumbersMatch[1]);
+    const lng = parseFloat(twoNumbersMatch[2]);
+    if (isValidLatLng(lat, lng)) return { lat, lng };
   }
 
   return null;
