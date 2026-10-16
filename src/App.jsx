@@ -41,6 +41,7 @@ const TABS = [
 
 const WORKING_STATE_KEY = 'txdot-distress:working-state';
 const SAVE_DEBOUNCE_MS = 800;
+const getLastProjectStorageKey = (uid) => `txdot-distress:last-project:${uid || 'anonymous'}`;
 
 let _toastId = 0;
 
@@ -147,8 +148,11 @@ export default function App() {
               );
 
               setState(prev => ({ ...prev, projects: hydrated }));
+              const lastKey = getLastProjectStorageKey(user.uid);
+              const savedLastId = localStorage.getItem(lastKey);
               setSelectedProjectId(prevId => {
-                if (hydrated.some(p => p.id === prevId)) return prevId;
+                if (savedLastId && hydrated.some(p => p.id === savedLastId)) return savedLastId;
+                if (prevId && hydrated.some(p => p.id === prevId)) return prevId;
                 return hydrated[0]?.id || null;
               });
             }
@@ -169,7 +173,12 @@ export default function App() {
         get(WORKING_STATE_KEY).then(saved => {
           if (saved && Array.isArray(saved.projects) && saved.projects.length > 0) {
             setState(saved);
-            setSelectedProjectId(saved.projects[0]?.id || null);
+            const lastKey = getLastProjectStorageKey('anonymous');
+            const savedLastId = localStorage.getItem(lastKey);
+            const targetId = (savedLastId && saved.projects.some(p => p.id === savedLastId))
+              ? savedLastId
+              : (saved.projects[0]?.id || null);
+            setSelectedProjectId(targetId);
           }
         }).catch(console.warn);
       }
@@ -204,9 +213,21 @@ export default function App() {
           })
         );
         setState({ ...saved, projects: hydrated });
-        setSelectedProjectId(hydrated[0].id);
+        const uid = currentUserRef.current?.uid || 'anonymous';
+        const lastKey = getLastProjectStorageKey(uid);
+        const savedLastId = localStorage.getItem(lastKey);
+        const targetId = (savedLastId && hydrated.some(p => p.id === savedLastId))
+          ? savedLastId
+          : (hydrated[0]?.id || null);
+        setSelectedProjectId(targetId);
       } else {
-        setSelectedProjectId(state.projects[0]?.id || null);
+        const uid = currentUserRef.current?.uid || 'anonymous';
+        const lastKey = getLastProjectStorageKey(uid);
+        const savedLastId = localStorage.getItem(lastKey);
+        const targetId = (savedLastId && state.projects.some(p => p.id === savedLastId))
+          ? savedLastId
+          : (state.projects[0]?.id || null);
+        setSelectedProjectId(targetId);
       }
     }).catch(console.warn);
   }, []);
@@ -228,6 +249,18 @@ export default function App() {
   const totalProjectCaptures = useMemo(() => {
     return projectSections.reduce((acc, s) => acc + (s.captures?.length || 0), 0);
   }, [projectSections]);
+
+  // ── Track Last Selected Project per Account ────────────────────────────────
+  useEffect(() => {
+    if (selectedProjectId) {
+      const accountKey = currentUser?.uid || 'anonymous';
+      try {
+        localStorage.setItem(getLastProjectStorageKey(accountKey), selectedProjectId);
+      } catch (e) {
+        console.warn('Failed to save last selected project to localStorage:', e);
+      }
+    }
+  }, [selectedProjectId, currentUser]);
 
   // ── Cloud Auto-Save ────────────────────────────────────────────────────────
   const triggerAutoSave = useCallback((newState) => {
@@ -603,6 +636,9 @@ export default function App() {
           onLoadPmis={loadPmisFromFile}
           projects={state.projects}
           selectedProjectId={selectedProjectId}
+          selectedProject={selectedProject}
+          onOpenProjects={() => setShowOpenProjectsModal(true)}
+          onNewProject={() => setShowNewProjectModal(true)}
           onSelectProject={id => { setSelectedProjectId(id); setSelectedSectionId(null); }}
           onRenameProject={handleRenameProject}
           onDeleteProject={handleDeleteProject}
