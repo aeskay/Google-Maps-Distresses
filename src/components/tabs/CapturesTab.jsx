@@ -15,6 +15,7 @@ export default function CapturesTab({
   onSelectSection,
   onUpdateSection,
   addToast,
+  onViewInMap,
 }) {
   const [filterSectionId, setFilterSectionId] = useState(selectedSectionId || 'all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -501,6 +502,12 @@ export default function CapturesTab({
           }}
           onDeleteCapture={(id) => {
             handleDeleteCapture(id, inspectCapture.sectionId);
+          }}
+          onViewInMap={(c) => {
+            setInspectCapture(null);
+            if (onViewInMap) {
+              onViewInMap(c);
+            }
           }}
           onClose={() => setInspectCapture(null)}
         />

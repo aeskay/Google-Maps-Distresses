@@ -49,6 +49,7 @@ export default function MapTab({
   addToast,
   activeTab = 'map',
   focusSectionTrigger = 0,
+  targetCapture = null,
 }) {
   const mapContainerRef = useRef(null);
   const panoContainerRef = useRef(null);
@@ -476,6 +477,88 @@ export default function MapTab({
       addToast('warning', 'Search Unavailable', 'Geocoder service is unavailable.');
     }
   }, [mapSearchText, addToast, fetchPanoTimeline, getSectionPathCoords]);
+
+  // ── Jump Map and Street View to a Captured Distress ─────────────────────────
+  const jumpToCaptureLocation = useCallback((capture) => {
+    if (!capture || !googleMapInstance.current || !window.google?.maps) return;
+    const lat = Number(capture.lat);
+    const lng = Number(capture.lon !== undefined ? capture.lon : capture.lng);
+    if (isNaN(lat) || isNaN(lng)) return;
+
+    // Suppress any start-jumping logic from overwriting this position
+    lastMapClickTimeRef.current = Date.now();
+    suppressMapPanUntilRef.current = Date.now() + 4000;
+
+    // 1. Pan and zoom Google Map
+    googleMapInstance.current.panTo({ lat, lng });
+    googleMapInstance.current.setZoom(18);
+
+    // 2. Update current position state & orange marker
+    setCurrentPosition({ lat, lng });
+
+    // 3. Ensure view layout includes Street View (switch from map-only to split if needed)
+    if (viewLayoutRef.current === 'map-only') {
+      setViewLayout('split');
+    }
+
+    // 4. Update Street View Panorama & Heading / Pitch
+    if (panoramaInstance.current) {
+      panoramaInstance.current.setVisible(true);
+      setIsStreetViewActive(true);
+
+      const targetPov = {
+        heading: capture.heading != null && !isNaN(capture.heading) ? Number(capture.heading) : 0,
+        pitch: capture.pitch != null && !isNaN(capture.pitch) ? Number(capture.pitch) : 0,
+        zoom: 1,
+      };
+
+      if (capture.panoId) {
+        panoramaInstance.current.setPano(capture.panoId);
+        panoramaInstance.current.setPov(targetPov);
+        fetchPanoTimeline(capture.panoId, { lat, lng });
+      } else if (streetViewServiceRef.current) {
+        streetViewServiceRef.current.getPanorama(
+          { location: { lat, lng }, radius: 100 },
+          (data, status) => {
+            if (status === 'OK' && data?.location?.latLng) {
+              panoramaInstance.current.setPosition(data.location.latLng);
+              panoramaInstance.current.setPov(targetPov);
+              fetchPanoTimeline(data.location.pano, data.location.latLng);
+            } else {
+              panoramaInstance.current.setPosition({ lat, lng });
+              panoramaInstance.current.setPov(targetPov);
+            }
+          }
+        );
+      } else {
+        panoramaInstance.current.setPosition({ lat, lng });
+        panoramaInstance.current.setPov(targetPov);
+      }
+    }
+
+    addToast(
+      'info',
+      'Distress Located',
+      `Viewing ${capture.distressType || 'distress'} at +${(capture.distanceFromStartMiles || 0).toFixed(2)} mi.`
+    );
+  }, [fetchPanoTimeline, addToast]);
+
+  // Listener for targetCapture requests passed from parent
+  const lastTargetCaptureTriggerRef = useRef(0);
+  useEffect(() => {
+    if (!targetCapture || !targetCapture._triggerTime) return;
+    if (targetCapture._triggerTime === lastTargetCaptureTriggerRef.current) return;
+    lastTargetCaptureTriggerRef.current = targetCapture._triggerTime;
+
+    if (!googleMapInstance.current) {
+      const timer = setTimeout(() => {
+        jumpToCaptureLocation(targetCapture);
+      }, 500);
+      return () => clearTimeout(timer);
+    } else {
+      jumpToCaptureLocation(targetCapture);
+    }
+  }, [targetCapture, jumpToCaptureLocation]);
 
   // Focus map immediately and position Street View when selectedSectionId or focusSectionTrigger changes
   useEffect(() => {
@@ -2051,6 +2134,10 @@ export default function MapTab({
           onDeleteCapture={(id) => {
             const nextCaptures = selectedSection.captures.filter(c => c.id !== id);
             onUpdateSection({ ...selectedSection, captures: nextCaptures });
+          }}
+          onViewInMap={(c) => {
+            setInspectCapture(null);
+            jumpToCaptureLocation(c);
           }}
           onClose={() => setInspectCapture(null)}
         />

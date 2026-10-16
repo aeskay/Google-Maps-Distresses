@@ -16,6 +16,7 @@ export default function CaptureDetailModal({
   onUpdateCapture,
   onDeleteCapture,
   onClose,
+  onViewInMap,
 }) {
   const [distressType, setDistressType] = useState(capture?.distressType || '');
   const [imageYear, setImageYear] = useState(capture?.imageYear || (capture?.imageDate ? capture.imageDate.slice(0, 4) : ''));
@@ -90,14 +91,19 @@ export default function CaptureDetailModal({
             </div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-              <a
-                href={googleMapsUrl}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                onClick={() => {
+                  if (onViewInMap) {
+                    onViewInMap(capture);
+                  }
+                  onClose();
+                }}
                 className="btn btn--secondary btn--sm"
+                title="View and navigate to this distress directly in the Map & Street View workspace"
               >
-                🗺️ View Point on Google Maps
-              </a>
+                🗺️ View on Map & Street View
+              </button>
               <a
                 href={streetViewWebUrl}
                 target="_blank"

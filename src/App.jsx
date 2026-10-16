@@ -63,6 +63,20 @@ export default function App() {
     }
   }, []);
 
+  const [targetCapture, setTargetCapture] = useState(null);
+
+  const handleViewInMapTab = useCallback((capture) => {
+    if (!capture) return;
+    if (capture.sectionId && capture.sectionId !== selectedSectionId) {
+      handleSelectSection(capture.sectionId, false);
+    }
+    setTargetCapture({
+      ...capture,
+      _triggerTime: Date.now(),
+    });
+    setActiveTab('map');
+  }, [selectedSectionId, handleSelectSection]);
+
   const [saveStatus, setSaveStatus] = useState(null); // 'saving' | 'saved' | null
   const [cloudSyncStatus, setCloudSyncStatus] = useState('offline'); // 'synced' | 'saving' | 'offline' | 'error'
   const [currentUser, setCurrentUser] = useState(null);
@@ -631,6 +645,7 @@ export default function App() {
               addToast={addToast}
               activeTab={activeTab}
               focusSectionTrigger={focusSectionTrigger}
+              targetCapture={targetCapture}
             />
           </div>
 
@@ -642,6 +657,7 @@ export default function App() {
               onSelectSection={handleSelectSection}
               onUpdateSection={handleUpdateSection}
               addToast={addToast}
+              onViewInMap={handleViewInMapTab}
             />
           </div>
 
