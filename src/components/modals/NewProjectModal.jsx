@@ -3,6 +3,7 @@
  * Modal for creating a new distress project.
  */
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 
 export default function NewProjectModal({ onAddProject, onCancel }) {
   const [name, setName] = useState('');
@@ -13,7 +14,7 @@ export default function NewProjectModal({ onAddProject, onCancel }) {
     onAddProject(name.trim());
   }
 
-  return (
+  return createPortal(
     <div className="modal-overlay">
       <div className="modal" style={{ maxWidth: 420 }}>
         <form onSubmit={handleSubmit}>
@@ -44,6 +45,7 @@ export default function NewProjectModal({ onAddProject, onCancel }) {
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

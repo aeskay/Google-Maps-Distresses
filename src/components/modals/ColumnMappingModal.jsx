@@ -3,6 +3,7 @@
  * CSV / Excel column mapping with comprehensive GPS Start/End support and auto-detection.
  */
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { haversineDistanceMiles } from '../../utils/txdotGisApi';
 
@@ -172,7 +173,7 @@ export default function ColumnMappingModal({
     onImport(imported, importMode);
   }
 
-  return (
+  return createPortal(
     <div className="modal-overlay">
       <div className="modal modal--lg">
         <div className="modal__header">
@@ -313,6 +314,7 @@ export default function ColumnMappingModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -3,6 +3,7 @@
  * Firebase Authentication Modal for Email/Password and Google popup sign-in.
  */
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   signInWithEmail,
   signUpWithEmail,
@@ -73,7 +74,7 @@ export default function AuthModal({ onClose, addToast }) {
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-overlay">
       <div className="modal" style={{ maxWidth: 420 }}>
         <div className="modal__header">
@@ -185,6 +186,7 @@ export default function AuthModal({ onClose, addToast }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

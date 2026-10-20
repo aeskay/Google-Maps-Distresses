@@ -3,6 +3,7 @@
  * Modal for creating or editing a section manually, with full GPS Start and End input support.
  */
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { TXDOT_DISTRICT_NAMES } from '../../utils/normalizers';
 import { haversineDistanceMiles, fetchCoordinatesForSection } from '../../utils/txdotGisApi';
@@ -221,7 +222,7 @@ export default function AddSectionModal({
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-overlay">
       <div className="modal modal--md">
         <form onSubmit={handleSubmit}>
@@ -451,6 +452,7 @@ export default function AddSectionModal({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

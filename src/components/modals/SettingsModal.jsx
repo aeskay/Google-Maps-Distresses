@@ -3,6 +3,7 @@
  * In-app configuration for Google Maps API Key and Firebase / Firestore setup.
  */
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   getStoredGoogleMapsApiKey,
   saveGoogleMapsApiKey,
@@ -92,7 +93,7 @@ export default function SettingsModal({ onClose, addToast }) {
     addToast('success', 'Rules Copied', 'Firestore Security Rules copied to clipboard!');
   }
 
-  return (
+  return createPortal(
     <div className="modal-overlay">
       <div className="modal modal--lg">
         <div className="modal__header">
@@ -234,6 +235,7 @@ export default function SettingsModal({ onClose, addToast }) {
           <button className="btn btn--secondary" onClick={onClose}>Close</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

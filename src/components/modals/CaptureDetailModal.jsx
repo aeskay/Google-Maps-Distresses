@@ -3,6 +3,7 @@
  * High-resolution distress snapshot inspector and editor.
  */
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   getDistressSuggestionsForSection,
   saveSectionRecentDistressType,
@@ -56,7 +57,7 @@ export default function CaptureDetailModal({
     ? `https://www.google.com/maps/@?api=1&map_action=pano&pano=${capture.panoId}&heading=${capture.heading || 0}&pitch=${capture.pitch || 0}`
     : `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${capture.lat},${capture.lon}&heading=${capture.heading || 0}&pitch=${capture.pitch || 0}`;
 
-  return (
+  return createPortal(
     <div className="modal-overlay">
       <div className="modal modal--xl">
         <div className="modal__header">
@@ -243,6 +244,7 @@ export default function CaptureDetailModal({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -3,6 +3,7 @@
  * Modal to view, switch between, and manage existing projects.
  */
 import React from 'react';
+import { createPortal } from 'react-dom';
 
 export default function OpenProjectsModal({
   projects = [],
@@ -12,7 +13,7 @@ export default function OpenProjectsModal({
   onNewProject,
   onClose,
 }) {
-  return (
+  return createPortal(
     <div className="modal-overlay">
       <div className="modal modal--md">
         <div className="modal__header">
@@ -77,6 +78,7 @@ export default function OpenProjectsModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

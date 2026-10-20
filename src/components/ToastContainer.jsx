@@ -30,7 +30,7 @@ export default function ToastContainer({ toasts = [], onRemove }) {
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
-        zIndex: 9999,
+        zIndex: 100000,
         maxWidth: 360,
       }}
     >
