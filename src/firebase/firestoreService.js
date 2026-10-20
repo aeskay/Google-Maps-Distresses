@@ -17,34 +17,23 @@ import {
 import { db } from './config';
 
 function serializeCoordinatesForFirestore(coords) {
-  if (!coords) return { coordinates: null, coordinatesJson: null };
-  try {
-    const coordinatesJson = JSON.stringify(coords);
-    const firestoreSafe = {
-      status: coords.status || 'unknown',
-      timestamp: coords.timestamp || null,
-      highwayRoute: coords.highwayRoute || null,
-      roadbed: coords.roadbed || null,
-      routeId: coords.routeId || null,
-      lengthMiles: coords.lengthMiles ?? null,
-      begin: coords.begin || null,
-      end: coords.end || null,
-      beginDfo: coords.beginDfo ?? null,
-      endDfo: coords.endDfo ?? null,
-    };
-    return { coordinates: firestoreSafe, coordinatesJson };
-  } catch {
-    return { coordinates: null, coordinatesJson: null };
-  }
+  if (!coords) return { coordinates: null };
+  const firestoreSafe = {
+    status: coords.status || 'unknown',
+    timestamp: coords.timestamp || null,
+    highwayRoute: coords.highwayRoute || null,
+    roadbed: coords.roadbed || null,
+    routeId: coords.routeId || null,
+    lengthMiles: coords.lengthMiles ?? null,
+    begin: coords.begin || null,
+    end: coords.end || null,
+    beginDfo: coords.beginDfo ?? null,
+    endDfo: coords.endDfo ?? null,
+  };
+  return { coordinates: firestoreSafe };
 }
 
 function deserializeSectionCoordinates(s) {
-  if (s.coordinatesJson) {
-    try {
-      const parsed = JSON.parse(s.coordinatesJson);
-      if (parsed) return parsed;
-    } catch {}
-  }
   return s.coordinates || null;
 }
 
@@ -56,7 +45,7 @@ function sanitizeProject(project) {
     updatedAt: serverTimestamp(),
     sections: Array.isArray(project.sections)
       ? project.sections.map(s => {
-          const { coordinates, coordinatesJson } = serializeCoordinatesForFirestore(s.coordinates);
+          const { coordinates } = serializeCoordinatesForFirestore(s.coordinates);
           return {
             _uuid: s._uuid || s.id,
             id: s.id || '',
@@ -75,7 +64,6 @@ function sanitizeProject(project) {
             gpsStart: s.gpsStart || null,
             gpsEnd: s.gpsEnd || null,
             coordinates,
-            coordinatesJson,
             captures: Array.isArray(s.captures)
               ? s.captures.map(c => ({
                   id: c.id,
@@ -91,7 +79,7 @@ function sanitizeProject(project) {
                   imageDate: c.imageDate || null,
                   imageYear: c.imageYear || null,
                   panoId: c.panoId || null,
-                  imageUrl: c.imageUrl || null,
+                  imageUrl: c.imageUrl && !c.imageUrl.startsWith('data:image/') ? c.imageUrl : null,
                   notes: c.notes || '',
                 }))
               : [],

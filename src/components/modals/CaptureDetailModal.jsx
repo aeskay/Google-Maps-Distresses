@@ -10,6 +10,7 @@ import {
   saveCustomDistressType,
 } from '../../utils/distressPresets';
 import { calculateReferenceMarkerAtOffset } from '../../utils/txdotGisApi';
+import { getStreetViewStaticUrl } from '../../utils/googleMapsLoader';
 
 export default function CaptureDetailModal({
   capture,
@@ -80,15 +81,20 @@ export default function CaptureDetailModal({
               alignItems: 'center',
               justifyContent: 'center',
             }}>
-              {capture.imageUrl ? (
-                <img
-                  src={capture.imageUrl}
-                  alt={distressType}
-                  style={{ width: '100%', height: 'auto', display: 'block', objectFit: 'contain' }}
-                />
-              ) : (
-                <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No snapshot image available</div>
-              )}
+              {(() => {
+                const src = capture.imageUrl || (capture.panoId || (capture.lat && capture.lon)
+                  ? getStreetViewStaticUrl(capture.lat, capture.lon, capture.heading, capture.pitch, capture.fov, null, capture.panoId)
+                  : null);
+                return src ? (
+                  <img
+                    src={src}
+                    alt={distressType}
+                    style={{ width: '100%', height: 'auto', display: 'block', objectFit: 'contain' }}
+                  />
+                ) : (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No snapshot image available</div>
+                );
+              })()}
             </div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>

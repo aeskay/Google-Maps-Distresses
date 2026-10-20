@@ -6,6 +6,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { downloadCapturesCSV, downloadCapturesZip } from '../../utils/projectStore';
 import { exportSectionCapturesToExcel, exportGroupedSectionsSummaryToExcel } from '../../utils/capturesExcelExporter';
 import { calculateReferenceMarkerAtOffset } from '../../utils/txdotGisApi';
+import { getStreetViewStaticUrl } from '../../utils/googleMapsLoader';
 import CaptureDetailModal from '../modals/CaptureDetailModal';
 
 export default function CapturesTab({
@@ -314,17 +315,23 @@ export default function CapturesTab({
             >
               {/* Snapshot thumbnail */}
               <div style={{ height: 180, background: '#000', position: 'relative', overflow: 'hidden' }}>
-                {c.imageUrl ? (
-                  <img
-                    src={c.imageUrl}
-                    alt={c.distressType}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
-                ) : (
-                  <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-                    No snapshot
-                  </div>
-                )}
+                {(() => {
+                  const src = c.imageUrl || (c.panoId || (c.lat && c.lon)
+                    ? getStreetViewStaticUrl(c.lat, c.lon, c.heading, c.pitch, c.fov, null, c.panoId)
+                    : null);
+                  return src ? (
+                    <img
+                      src={src}
+                      alt={c.distressType}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+                      No snapshot
+                    </div>
+                  );
+                })()}
 
                 <div style={{
                   position: 'absolute',
@@ -445,13 +452,19 @@ export default function CapturesTab({
                   onClick={() => setInspectCapture(c)}
                 >
                   <td style={{ padding: '8px 14px' }}>
-                    {c.imageUrl && (
-                      <img
-                        src={c.imageUrl}
-                        alt=""
-                        style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 'var(--radius-sm)' }}
-                      />
-                    )}
+                    {(() => {
+                      const src = c.imageUrl || (c.panoId || (c.lat && c.lon)
+                        ? getStreetViewStaticUrl(c.lat, c.lon, c.heading, c.pitch, c.fov, null, c.panoId)
+                        : null);
+                      return src ? (
+                        <img
+                          src={src}
+                          alt=""
+                          style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 'var(--radius-sm)' }}
+                          loading="lazy"
+                        />
+                      ) : null;
+                    })()}
                   </td>
                   <td style={{ padding: '8px 14px', fontWeight: 600 }}>{c.sectionId}</td>
                   <td style={{ padding: '8px 14px' }}>{c.section?.highway}</td>

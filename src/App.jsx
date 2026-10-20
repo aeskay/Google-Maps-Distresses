@@ -147,7 +147,31 @@ export default function App() {
                 })
               );
 
-              setState(prev => ({ ...prev, projects: hydrated }));
+              setState(prev => {
+                const localImageMap = new Map();
+                (prev.projects || []).forEach(lp => {
+                  (lp.sections || []).forEach(ls => {
+                    (ls.captures || []).forEach(lc => {
+                      if (lc.id && lc.imageUrl) {
+                        localImageMap.set(lc.id, lc.imageUrl);
+                      }
+                    });
+                  });
+                });
+
+                const merged = hydrated.map(p => ({
+                  ...p,
+                  sections: (p.sections || []).map(s => ({
+                    ...s,
+                    captures: (s.captures || []).map(c => ({
+                      ...c,
+                      imageUrl: c.imageUrl || localImageMap.get(c.id) || null,
+                    })),
+                  })),
+                }));
+
+                return { ...prev, projects: merged };
+              });
               const lastKey = getLastProjectStorageKey(user.uid);
               const savedLastId = localStorage.getItem(lastKey);
               setSelectedProjectId(prevId => {
@@ -418,17 +442,11 @@ export default function App() {
         }
         return { ...p, sections: Array.from(map.values()) };
       });
-
-      if (currentUser) {
-        const updated = nextProjects.find(p => p.id === selectedProjectId);
-        if (updated) saveUserProject(currentUser.uid, updated);
-      }
-
       return { ...prev, projects: nextProjects };
     });
 
     addToast('success', 'Sections Imported', `${newSections.length} section(s) added to project.`);
-  }, [selectedProjectId, mutate, currentUser, addToast]);
+  }, [selectedProjectId, mutate, addToast]);
 
   const handleUpdateSection = useCallback((updatedSection) => {
     if (!selectedProjectId) return;
@@ -441,15 +459,9 @@ export default function App() {
           sections: (p.sections || []).map(s => s.id === updatedSection.id ? updatedSection : s),
         };
       });
-
-      if (currentUser) {
-        const updated = nextProjects.find(p => p.id === selectedProjectId);
-        if (updated) saveUserProject(currentUser.uid, updated);
-      }
-
       return { ...prev, projects: nextProjects };
     });
-  }, [selectedProjectId, mutate, currentUser]);
+  }, [selectedProjectId, mutate]);
 
   const handleBatchUpdateSections = useCallback((updatedSections) => {
     if (!selectedProjectId || !Array.isArray(updatedSections)) return;
@@ -463,15 +475,9 @@ export default function App() {
           sections: (p.sections || []).map(s => updateMap.has(s.id) ? updateMap.get(s.id) : s),
         };
       });
-
-      if (currentUser) {
-        const updated = nextProjects.find(p => p.id === selectedProjectId);
-        if (updated) saveUserProject(currentUser.uid, updated);
-      }
-
       return { ...prev, projects: nextProjects };
     });
-  }, [selectedProjectId, mutate, currentUser]);
+  }, [selectedProjectId, mutate]);
 
   const handleDeleteSection = useCallback((sectionId) => {
     if (!selectedProjectId) return;
