@@ -3,11 +3,11 @@
  * Interactive Google Map & Travel Route Planner for all project highway sections.
  *
  * Features:
- * - Full geographic map showing all project sections with start/end coordinates and polylines.
- * - Google Maps driving route search between two locations (Origin & Destination) with Autocomplete.
+ * - High-contrast "Plain Map" style toggle removing terrain/POI clutter so sections pop.
+ * - Prominent pin markers and halo polylines ensuring section locations are clearly visible at all zoom levels.
+ * - Google Maps driving route search supporting coordinates and place names without triggering Places API errors.
  * - Proximity analysis: detects which sections fall along or near the driving route (within customizable radius).
- * - Highlights on-route sections and provides trip order listing to easily visit sections while traveling.
- * - Seamless jump to Map & Street View tab for full pavement distress inspection.
+ * - "Sections Along Trip" drawer with direct jump to Street View distress inspection.
  */
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
@@ -18,6 +18,7 @@ import {
   extractSectionCoordinates,
   calculateSectionRouteProximity,
 } from '../../utils/routeProximity';
+import { parseCoordinatesInput } from '../../utils/txdotGisApi';
 import { formatDistrictDisplay } from '../../utils/normalizers';
 
 const PROXIMITY_OPTIONS = [
@@ -26,6 +27,70 @@ const PROXIMITY_OPTIONS = [
   { label: '25 mi', value: 25 },
   { label: '50 mi', value: 50 },
   { label: 'All', value: Infinity },
+];
+
+// Clean minimalist map style removing terrain clutter, POIs, and noise
+const PLAIN_MAP_STYLE = [
+  {
+    featureType: 'administrative',
+    elementType: 'geometry',
+    stylers: [{ visibility: 'simplified' }, { color: '#cbd5e1' }],
+  },
+  {
+    featureType: 'administrative.country',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#64748b' }],
+  },
+  {
+    featureType: 'administrative.province',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#475569' }],
+  },
+  {
+    featureType: 'landscape',
+    elementType: 'geometry',
+    stylers: [{ color: '#f8fafc' }], // Crisp clean off-white background
+  },
+  {
+    featureType: 'landscape.man_made',
+    elementType: 'geometry',
+    stylers: [{ color: '#f1f5f9' }],
+  },
+  {
+    featureType: 'poi',
+    elementType: 'all',
+    stylers: [{ visibility: 'off' }], // Strip all commercial / park green blobs
+  },
+  {
+    featureType: 'road',
+    elementType: 'geometry',
+    stylers: [{ color: '#e2e8f0' }], // Muted light grey roads
+  },
+  {
+    featureType: 'road.highway',
+    elementType: 'geometry',
+    stylers: [{ color: '#cbd5e1' }], // Distinct but subtle highway network
+  },
+  {
+    featureType: 'road.highway',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#94a3b8' }],
+  },
+  {
+    featureType: 'transit',
+    elementType: 'all',
+    stylers: [{ visibility: 'off' }],
+  },
+  {
+    featureType: 'water',
+    elementType: 'geometry',
+    stylers: [{ color: '#dbeafe' }], // Soft light blue water
+  },
+  {
+    featureType: 'water',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#93c5fd' }],
+  },
 ];
 
 export default function ProjectRouteMapTab({
@@ -38,19 +103,18 @@ export default function ProjectRouteMapTab({
   activeTab,
 }) {
   const mapContainerRef = useRef(null);
-  const originInputRef = useRef(null);
-  const destInputRef = useRef(null);
-
   const googleMapRef = useRef(null);
   const directionsRendererRef = useRef(null);
   const polylinesMapRef = useRef(new Map());
-  const extentMarkersRef = useRef([]);
+  const markersMapRef = useRef(new Map());
   const infoWindowRef = useRef(null);
-  const originAutocompleteRef = useRef(null);
-  const destAutocompleteRef = useRef(null);
 
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const [mapsError, setMapsError] = useState(null);
+
+  // Map Style: 'plain' (Clean high-contrast) | 'roadmap' (Google standard) | 'hybrid' (Satellite)
+  const [mapStyleType, setMapStyleType] = useState('plain');
+  const [showSectionMarkers, setShowSectionMarkers] = useState(true);
 
   // Travel Route Search State
   const [originText, setOriginText] = useState('');
@@ -59,8 +123,8 @@ export default function ProjectRouteMapTab({
   const [isLocatingUser, setIsLocatingUser] = useState(false);
 
   // Computed Directions Result
-  const [directionsData, setDirectionsData] = useState(null); // { route, pathCoords, distanceText, durationText, summary }
-  const [routeWaypoints, setRouteWaypoints] = useState([]); // Array of { location: string, label: string }
+  const [directionsData, setDirectionsData] = useState(null);
+  const [routeWaypoints, setRouteWaypoints] = useState([]);
 
   // Proximity & Filter State
   const [proximityMiles, setProximityMiles] = useState(10);
@@ -96,13 +160,11 @@ export default function ProjectRouteMapTab({
       center: defaultCenter,
       zoom: 6,
       mapTypeId: 'roadmap',
+      styles: PLAIN_MAP_STYLE, // Default to Plain clean high-contrast map
       tilt: 0,
       streetViewControl: true,
       fullscreenControl: false,
-      mapTypeControlOptions: {
-        style: gMaps.MapTypeControlStyle.DROPDOWN_MENU,
-        position: gMaps.ControlPosition.TOP_RIGHT,
-      },
+      mapTypeControl: false, // We supply custom Plain / Roadmap / Satellite buttons
     });
 
     googleMapRef.current = map;
@@ -114,46 +176,32 @@ export default function ProjectRouteMapTab({
       polylineOptions: {
         strokeColor: '#2563eb',
         strokeWeight: 6,
-        strokeOpacity: 0.85,
-        zIndex: 50,
+        strokeOpacity: 0.9,
+        zIndex: 60,
       },
     });
     directionsRendererRef.current = renderer;
 
     // Info Window
     infoWindowRef.current = new gMaps.InfoWindow();
-
-    // Attach Autocomplete to inputs if Places library is available
-    if (gMaps.places && originInputRef.current && destInputRef.current) {
-      try {
-        const originAuto = new gMaps.places.Autocomplete(originInputRef.current, {
-          types: ['geocode', 'establishment'],
-          componentRestrictions: { country: 'us' },
-        });
-        originAuto.addListener('place_changed', () => {
-          const place = originAuto.getPlace();
-          if (place?.formatted_address || place?.name) {
-            setOriginText(place.formatted_address || place.name);
-          }
-        });
-        originAutocompleteRef.current = originAuto;
-
-        const destAuto = new gMaps.places.Autocomplete(destInputRef.current, {
-          types: ['geocode', 'establishment'],
-          componentRestrictions: { country: 'us' },
-        });
-        destAuto.addListener('place_changed', () => {
-          const place = destAuto.getPlace();
-          if (place?.formatted_address || place?.name) {
-            setDestText(place.formatted_address || place.name);
-          }
-        });
-        destAutocompleteRef.current = destAuto;
-      } catch (err) {
-        console.warn('Google Places Autocomplete init notice:', err);
-      }
-    }
   }, [mapsLoaded]);
+
+  // ── Apply Map Style Toggle (Plain vs Roadmap vs Hybrid) ───────────────────
+  useEffect(() => {
+    if (!googleMapRef.current || !window.google?.maps) return;
+    const map = googleMapRef.current;
+
+    if (mapStyleType === 'plain') {
+      map.setMapTypeId('roadmap');
+      map.setOptions({ styles: PLAIN_MAP_STYLE });
+    } else if (mapStyleType === 'roadmap') {
+      map.setMapTypeId('roadmap');
+      map.setOptions({ styles: null });
+    } else if (mapStyleType === 'hybrid') {
+      map.setMapTypeId('hybrid');
+      map.setOptions({ styles: null });
+    }
+  }, [mapStyleType]);
 
   // Handle Tab Switch Resize
   useEffect(() => {
@@ -205,12 +253,13 @@ export default function ProjectRouteMapTab({
       .sort((a, b) => (a.routeProgressFraction ?? 0) - (b.routeProgressFraction ?? 0));
   }, [sectionsWithProximity, directionsData]);
 
-  // ── Render Section Polylines on Google Map ────────────────────────────────
+  // ── Render High-Contrast Polylines & Pin Markers on Google Map ────────────
   useEffect(() => {
     if (!googleMapRef.current || !window.google?.maps) return;
     const gMaps = window.google.maps;
     const map = googleMapRef.current;
     const polyMap = polylinesMapRef.current;
+    const markerMap = markersMapRef.current;
 
     const currentSecIds = new Set();
 
@@ -219,78 +268,139 @@ export default function ProjectRouteMapTab({
       currentSecIds.add(secId);
       const points = sec.points;
 
-      if (!points || points.length < 2) return;
+      if (!points || points.length === 0) return;
 
       const pathLatLngs = points.map(([lat, lng]) => ({ lat, lng }));
       const hasRoute = !!directionsData;
       const isNearby = sec.isNearby;
 
       // Color coding:
-      // When route active: Nearby sections highlighted in emerald green (#10b981), others subtle slate (#94a3b8)
-      // When no route: Roadbed color (Right: Orange, Left: Blue, Other: Green)
-      let strokeColor = '#10b981';
-      let strokeWeight = 5;
-      let strokeOpacity = 0.9;
-      let zIndex = 20;
+      // Right (R): Orange #ea580c | Left (L): Sky Blue #0284c7 | Single/Other: Emerald #10b981
+      const roadbed = sec.coordinates?.roadbed;
+      const defaultColor = roadbed === 'R' ? '#ea580c' : roadbed === 'L' ? '#0284c7' : '#10b981';
+
+      let strokeColor = defaultColor;
+      let coreWeight = 5;
+      let haloWeight = 9;
+      let strokeOpacity = 1.0;
+      let zIndex = 30;
 
       if (hasRoute) {
         if (isNearby) {
           strokeColor = '#059669'; // Bold Emerald
-          strokeWeight = 7;
+          coreWeight = 7;
+          haloWeight = 12;
           strokeOpacity = 1.0;
           zIndex = 100;
         } else {
           strokeColor = '#94a3b8'; // Muted Slate
-          strokeWeight = 2;
+          coreWeight = 2;
+          haloWeight = 4;
           strokeOpacity = 0.4;
           zIndex = 10;
         }
-      } else {
-        const roadbed = sec.coordinates?.roadbed;
-        strokeColor = roadbed === 'R' ? '#ea580c' : roadbed === 'L' ? '#0284c7' : '#059669';
-        strokeWeight = 5;
-        strokeOpacity = 0.85;
       }
 
       const isVisible = !(hasRoute && onlyShowNearby && !isNearby);
 
+      // ── 1. Polyline Rendering (Dual-layer: White Halo casing + Vibrant Core)
       let polyEntry = polyMap.get(secId);
 
       if (!polyEntry) {
-        const poly = new gMaps.Polyline({
+        // Outer halo / casing line for high contrast
+        const haloPoly = new gMaps.Polyline({
+          path: pathLatLngs,
+          strokeColor: '#ffffff',
+          strokeOpacity: isVisible ? 0.9 : 0,
+          strokeWeight: haloWeight,
+          zIndex: zIndex - 1,
+          map,
+        });
+
+        // Vibrant core line
+        const corePoly = new gMaps.Polyline({
           path: pathLatLngs,
           strokeColor,
           strokeOpacity: isVisible ? strokeOpacity : 0,
-          strokeWeight,
+          strokeWeight: coreWeight,
           zIndex,
           map,
         });
 
-        poly.addListener('click', (e) => {
-          handleSectionClick(sec, e.latLng);
+        const clickHandler = (e) => handleSectionClick(sec, e.latLng);
+        corePoly.addListener('click', clickHandler);
+        haloPoly.addListener('click', clickHandler);
+
+        polyMap.set(secId, { corePoly, haloPoly, sec });
+      } else {
+        polyEntry.haloPoly.setPath(pathLatLngs);
+        polyEntry.haloPoly.setOptions({
+          strokeOpacity: isVisible ? 0.9 : 0,
+          strokeWeight: haloWeight,
+          zIndex: zIndex - 1,
         });
 
-        polyMap.set(secId, { poly, sec });
-      } else {
-        polyEntry.poly.setPath(pathLatLngs);
-        polyEntry.poly.setOptions({
+        polyEntry.corePoly.setPath(pathLatLngs);
+        polyEntry.corePoly.setOptions({
           strokeColor,
           strokeOpacity: isVisible ? strokeOpacity : 0,
-          strokeWeight,
+          strokeWeight: coreWeight,
           zIndex,
         });
         polyEntry.sec = sec;
       }
+
+      // ── 2. Prominent Section Pin Marker (Visible even at high orbit / state zoom)
+      const markerPos = pathLatLngs[0];
+      let markerEntry = markerMap.get(secId);
+
+      const markerColor = hasRoute ? (isNearby ? '#059669' : '#94a3b8') : defaultColor;
+      const markerScale = isNearby ? 8 : 6.5;
+
+      const markerIcon = {
+        path: gMaps.SymbolPath.CIRCLE,
+        fillColor: markerColor,
+        fillOpacity: 1.0,
+        strokeColor: '#ffffff',
+        strokeWeight: 2.5,
+        scale: markerScale,
+      };
+
+      if (!markerEntry) {
+        const marker = new gMaps.Marker({
+          position: markerPos,
+          icon: markerIcon,
+          title: `${sec.highway || 'Section'} (ID: ${sec.id})`,
+          zIndex: zIndex + 2,
+          map: showSectionMarkers && isVisible ? map : null,
+        });
+
+        marker.addListener('click', () => handleSectionClick(sec, markerPos));
+        markerMap.set(secId, { marker, sec });
+      } else {
+        markerEntry.marker.setPosition(markerPos);
+        markerEntry.marker.setIcon(markerIcon);
+        markerEntry.marker.setZIndex(zIndex + 2);
+        markerEntry.marker.setMap(showSectionMarkers && isVisible ? map : null);
+        markerEntry.sec = sec;
+      }
     });
 
-    // Remove obsolete polylines
+    // Remove obsolete polylines and markers
     for (const [id, entry] of polyMap.entries()) {
       if (!currentSecIds.has(id)) {
-        entry.poly.setMap(null);
+        entry.corePoly.setMap(null);
+        entry.haloPoly.setMap(null);
         polyMap.delete(id);
       }
     }
-  }, [sectionsWithProximity, directionsData, onlyShowNearby]);
+    for (const [id, entry] of markerMap.entries()) {
+      if (!currentSecIds.has(id)) {
+        entry.marker.setMap(null);
+        markerMap.delete(id);
+      }
+    }
+  }, [sectionsWithProximity, directionsData, onlyShowNearby, showSectionMarkers]);
 
   // ── Fit Map Bounds to Project Sections ────────────────────────────────────
   const fitProjectBounds = useCallback(() => {
@@ -354,7 +464,7 @@ export default function ProjectRouteMapTab({
             ${sec.district ? `District: ${formatDistrictDisplay(sec.district)}` : ''}
           </div>
           <div style="display:flex; gap:6px;">
-            <button id="btn-inspect-section" style="flex:1; background:#0f172a; color:#fff; border:none; padding:6px 10px; font-size:11px; font-weight:600; border-radius:6px; cursor:pointer;">
+            <button id="btn-inspect-section" style="flex:1; background:#0f172a; color:#fff; border:none; padding:7px 10px; font-size:11px; font-weight:600; border-radius:6px; cursor:pointer;">
               📸 Inspect Street View
             </button>
           </div>
@@ -366,7 +476,6 @@ export default function ProjectRouteMapTab({
         infoWindowRef.current.setPosition(pos);
         infoWindowRef.current.open(googleMapRef.current);
 
-        // Bind button click inside info window
         setTimeout(() => {
           const btn = document.getElementById('btn-inspect-section');
           if (btn) {
@@ -389,7 +498,7 @@ export default function ProjectRouteMapTab({
       const destination = destText.trim();
 
       if (!origin || !destination) {
-        addToast?.('warning', 'Missing Locations', 'Please enter both an Origin and a Destination to plan your route.');
+        addToast?.('warning', 'Missing Locations', 'Please enter both an Origin and a Destination.');
         return;
       }
 
@@ -402,16 +511,22 @@ export default function ProjectRouteMapTab({
       const gMaps = window.google.maps;
       const directionsService = new gMaps.DirectionsService();
 
-      const waypoints = routeWaypoints.map((w) => ({
-        location: w.location,
-        stopover: true,
-      }));
+      // Resolve coordinates or address string
+      const parseLocation = (input) => {
+        const coords = parseCoordinatesInput(input);
+        if (coords && !isNaN(coords.lat) && !isNaN(coords.lng)) {
+          return new gMaps.LatLng(coords.lat, coords.lng);
+        }
+        return input;
+      };
+
+      const originParam = parseLocation(origin);
+      const destParam = parseLocation(destination);
 
       directionsService.route(
         {
-          origin,
-          destination,
-          waypoints,
+          origin: originParam,
+          destination: destParam,
           travelMode: gMaps.TravelMode.DRIVING,
           optimizeWaypoints: false,
         },
@@ -423,7 +538,6 @@ export default function ProjectRouteMapTab({
             directionsRendererRef.current?.setDirections(result);
 
             const route = result.routes[0];
-            const leg = route.legs[0];
 
             // Extract all route coordinates
             const pathCoords = route.overview_path.map((pt) => [
@@ -456,22 +570,22 @@ export default function ProjectRouteMapTab({
             addToast?.(
               'success',
               'Route Calculated',
-              `${distanceMiles} miles (${durationText}). Identifying sections along your path.`
+              `${distanceMiles} miles (~${durationText}). Finding project sections along your route.`
             );
           } else {
-            console.error('Directions request failed:', status);
+            console.error('Directions request status:', status);
             addToast?.(
               'error',
               'Route Failed',
-              status === 'NOT_FOUND'
-                ? 'One or both locations could not be resolved. Check spelling or try a city name.'
-                : `Could not calculate driving directions: ${status}`
+              status === 'NOT_FOUND' || status === 'ZERO_RESULTS'
+                ? 'Could not find a driving route between these two locations. Check coordinates or spelling.'
+                : `Driving directions error (${status}).`
             );
           }
         }
       );
     },
-    [originText, destText, routeWaypoints, addToast]
+    [originText, destText, addToast]
   );
 
   // ── Clear Route ───────────────────────────────────────────────────────────
@@ -564,20 +678,69 @@ export default function ProjectRouteMapTab({
                 Travel Route & Project Sections Map
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                {mappedCount} of {sections.length} sections mapped on Texas roadway network
+                {mappedCount} of {sections.length} sections mapped across Texas highway network
               </div>
             </div>
           </div>
 
-          {/* Quick Map Controls */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Quick Map Controls & Plain Map Toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {/* Map Style Segmented Control */}
+            <div
+              style={{
+                display: 'inline-flex',
+                background: 'var(--bg-elevated)',
+                padding: 2,
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-default)',
+              }}
+            >
+              <button
+                type="button"
+                className={`btn btn--xs ${mapStyleType === 'plain' ? 'btn--primary' : 'btn--ghost'}`}
+                onClick={() => setMapStyleType('plain')}
+                title="Plain clean high-contrast map with no terrain clutter"
+                style={{ fontSize: 11, padding: '3px 9px', borderRadius: 'var(--radius-sm)' }}
+              >
+                🗺️ Plain Map
+              </button>
+              <button
+                type="button"
+                className={`btn btn--xs ${mapStyleType === 'roadmap' ? 'btn--primary' : 'btn--ghost'}`}
+                onClick={() => setMapStyleType('roadmap')}
+                title="Standard Google Roads"
+                style={{ fontSize: 11, padding: '3px 9px', borderRadius: 'var(--radius-sm)' }}
+              >
+                🛣️ Roads
+              </button>
+              <button
+                type="button"
+                className={`btn btn--xs ${mapStyleType === 'hybrid' ? 'btn--primary' : 'btn--ghost'}`}
+                onClick={() => setMapStyleType('hybrid')}
+                title="Satellite Imagery"
+                style={{ fontSize: 11, padding: '3px 9px', borderRadius: 'var(--radius-sm)' }}
+              >
+                🛰️ Satellite
+              </button>
+            </div>
+
+            {/* Toggle Section Markers */}
+            <button
+              className={`btn btn--xs ${showSectionMarkers ? 'btn--secondary' : 'btn--ghost'}`}
+              onClick={() => setShowSectionMarkers((v) => !v)}
+              title="Toggle visible pin markers on section locations"
+              style={{ fontSize: 11, padding: '3px 8px' }}
+            >
+              📍 {showSectionMarkers ? 'Pins ON' : 'Pins OFF'}
+            </button>
+
             <button
               className="btn btn--secondary btn--sm"
               onClick={fitProjectBounds}
               title="Fit map view to all project sections"
               style={{ fontSize: 11 }}
             >
-              🗺️ All Sections
+              All Sections
             </button>
 
             {directionsData && (
@@ -591,14 +754,14 @@ export default function ProjectRouteMapTab({
                 title="Fit map view to calculated driving route"
                 style={{ fontSize: 11 }}
               >
-                🚗 Fit Route
+                Fit Route
               </button>
             )}
 
             <button
               className={`btn btn--sm ${isSidebarOpen ? 'btn--secondary' : 'btn--ghost'}`}
               onClick={() => setIsSidebarOpen((v) => !v)}
-              title="Toggle Route Sections Drawer"
+              title="Toggle Sections Drawer"
               style={{ fontSize: 11 }}
             >
               📋 {isSidebarOpen ? 'Hide Drawer' : 'Show Sections'}
@@ -606,7 +769,7 @@ export default function ProjectRouteMapTab({
           </div>
         </div>
 
-        {/* Search Inputs Row */}
+        {/* Search Inputs Row (Freeform text or GPS coordinates) */}
         <form
           onSubmit={handleCalculateRoute}
           style={{
@@ -620,10 +783,9 @@ export default function ProjectRouteMapTab({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 240px', minWidth: 200, position: 'relative' }}>
             <span style={{ fontSize: 13, color: '#10b981', fontWeight: 700 }}>A</span>
             <input
-              ref={originInputRef}
               type="text"
               className="form-input"
-              placeholder="Origin (e.g. Lubbock, TX or address)"
+              placeholder="Origin (address, city, or lat, lng)"
               value={originText}
               onChange={(e) => setOriginText(e.target.value)}
               style={{ width: '100%', fontSize: 12, paddingRight: 32 }}
@@ -655,10 +817,9 @@ export default function ProjectRouteMapTab({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 240px', minWidth: 200 }}>
             <span style={{ fontSize: 13, color: '#ef4444', fontWeight: 700 }}>B</span>
             <input
-              ref={destInputRef}
               type="text"
               className="form-input"
-              placeholder="Destination (e.g. Austin, TX or Dallas)"
+              placeholder="Destination (address, city, or lat, lng)"
               value={destText}
               onChange={(e) => setDestText(e.target.value)}
               style={{ width: '100%', fontSize: 12 }}
@@ -822,26 +983,26 @@ export default function ProjectRouteMapTab({
                   <span>Driving Route</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 14, height: 4, background: '#059669', borderRadius: 2 }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#059669', border: '1px solid #fff' }} />
                   <span style={{ fontWeight: 600, color: '#059669' }}>Within {proximityMiles} mi of route</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 14, height: 2, background: '#94a3b8', borderRadius: 1 }} />
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#94a3b8' }} />
                   <span style={{ color: '#64748b' }}>Other Project Sections</span>
                 </div>
               </>
             ) : (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 14, height: 4, background: '#ea580c', borderRadius: 2 }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ea580c', border: '1px solid #fff' }} />
                   <span>Right Roadbed (R)</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 14, height: 4, background: '#0284c7', borderRadius: 2 }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#0284c7', border: '1px solid #fff' }} />
                   <span>Left Roadbed (L)</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 14, height: 4, background: '#059669', borderRadius: 2 }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', border: '1px solid #fff' }} />
                   <span>Single / Other</span>
                 </div>
               </>
@@ -916,7 +1077,6 @@ export default function ProjectRouteMapTab({
                 ) : (
                   nearbySectionsAlongRoute.map((sec, idx) => {
                     const isSelected = activeSectionPopup?.id === sec.id;
-                    const capturesCount = sec.captures?.length || 0;
 
                     return (
                       <div
@@ -1040,13 +1200,13 @@ export default function ProjectRouteMapTab({
                       lineHeight: 1.4,
                     }}
                   >
-                    💡 <strong>Plan a Trip:</strong> Enter your travel Origin and Destination above to find which sections you can visit along the way!
+                    💡 <strong>Travel Search:</strong> Enter your trip Origin and Destination above (city, address, or GPS coordinates) to see which sections you can visit on your drive!
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {sections.map((sec) => {
                       const pts = extractSectionCoordinates(sec);
-                      const isMapped = pts.length >= 2;
+                      const isMapped = pts.length >= 2 || (sec.coordinates?.begin && sec.coordinates?.end);
 
                       return (
                         <div
