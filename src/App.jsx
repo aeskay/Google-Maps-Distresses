@@ -38,16 +38,22 @@ const TABS = [
   { id: 'condition', label: 'Condition',         icon: '📊' },
   { id: 'heatmap',   label: 'Heatmap',           icon: '🔥' },
   { id: 'data',      label: 'Data Table',        icon: '📋' },
-  { id: 'routeMap',  label: 'Route & Project Map', icon: '🛣️' },
+  { id: 'routeMap',  label: 'Map',               icon: '🗺️' },
 ];
 
 const WORKING_STATE_KEY = 'txdot-distress:working-state';
+const LAST_PROJECT_ID_KEY = 'txdot-distress:last-project-id';
 const SAVE_DEBOUNCE_MS = 800;
 const getLastProjectStorageKey = (uid) => `txdot-distress:last-project:${uid || 'anonymous'}`;
 
 let _toastId = 0;
 
 export default function App() {
+  // ── User & Sync State ──────────────────────────────────────────────────────
+  const [currentUser, setCurrentUser] = useState(null);
+  const [saveStatus, setSaveStatus] = useState(null); // 'saving' | 'saved' | null
+  const [cloudSyncStatus, setCloudSyncStatus] = useState('offline'); // 'synced' | 'saving' | 'offline' | 'error'
+
   // ── Project State ──────────────────────────────────────────────────────────
   const [state, setState] = useState(() => {
     const blank = createBlankState();
@@ -56,10 +62,28 @@ export default function App() {
     return blank;
   });
 
-  const [selectedProjectId, setSelectedProjectId] = useState(null);
+  const [selectedProjectId, setSelectedProjectId] = useState(() => {
+    try {
+      return localStorage.getItem(LAST_PROJECT_ID_KEY) || null;
+    } catch {
+      return null;
+    }
+  });
   const [selectedSectionId, setSelectedSectionId] = useState(null);
   const [focusSectionTrigger, setFocusSectionTrigger] = useState(0);
   const [activeTab, setActiveTab] = useState('map');
+
+  const handleSelectProject = useCallback((id) => {
+    setSelectedProjectId(id);
+    setSelectedSectionId(null);
+    if (id) {
+      try {
+        localStorage.setItem(LAST_PROJECT_ID_KEY, id);
+        const accountKey = currentUser?.uid || 'anonymous';
+        localStorage.setItem(getLastProjectStorageKey(accountKey), id);
+      } catch (e) {}
+    }
+  }, [currentUser]);
 
   const handleSelectSection = useCallback((id, shouldFocus = true) => {
     setSelectedSectionId(id);
@@ -81,10 +105,6 @@ export default function App() {
     });
     setActiveTab('map');
   }, [selectedSectionId, handleSelectSection]);
-
-  const [saveStatus, setSaveStatus] = useState(null); // 'saving' | 'saved' | null
-  const [cloudSyncStatus, setCloudSyncStatus] = useState('offline'); // 'synced' | 'saving' | 'offline' | 'error'
-  const [currentUser, setCurrentUser] = useState(null);
 
   // ── PMIS Database State ────────────────────────────────────────────────────
   const [pmisFileName, setPmisFileName] = useState(null);
@@ -174,8 +194,7 @@ export default function App() {
 
                 return { ...prev, projects: merged };
               });
-              const lastKey = getLastProjectStorageKey(user.uid);
-              const savedLastId = localStorage.getItem(lastKey);
+              const savedLastId = localStorage.getItem(LAST_PROJECT_ID_KEY) || localStorage.getItem(getLastProjectStorageKey(user.uid));
               setSelectedProjectId(prevId => {
                 if (savedLastId && hydrated.some(p => p.id === savedLastId)) return savedLastId;
                 if (prevId && hydrated.some(p => p.id === prevId)) return prevId;
@@ -199,8 +218,7 @@ export default function App() {
         get(WORKING_STATE_KEY).then(saved => {
           if (saved && Array.isArray(saved.projects) && saved.projects.length > 0) {
             setState(saved);
-            const lastKey = getLastProjectStorageKey('anonymous');
-            const savedLastId = localStorage.getItem(lastKey);
+            const savedLastId = localStorage.getItem(LAST_PROJECT_ID_KEY) || localStorage.getItem(getLastProjectStorageKey('anonymous'));
             const targetId = (savedLastId && saved.projects.some(p => p.id === savedLastId))
               ? savedLastId
               : (saved.projects[0]?.id || null);
@@ -239,17 +257,13 @@ export default function App() {
           })
         );
         setState({ ...saved, projects: hydrated });
-        const uid = currentUserRef.current?.uid || 'anonymous';
-        const lastKey = getLastProjectStorageKey(uid);
-        const savedLastId = localStorage.getItem(lastKey);
+        const savedLastId = localStorage.getItem(LAST_PROJECT_ID_KEY) || localStorage.getItem(getLastProjectStorageKey('anonymous'));
         const targetId = (savedLastId && hydrated.some(p => p.id === savedLastId))
           ? savedLastId
           : (hydrated[0]?.id || null);
         setSelectedProjectId(targetId);
       } else {
-        const uid = currentUserRef.current?.uid || 'anonymous';
-        const lastKey = getLastProjectStorageKey(uid);
-        const savedLastId = localStorage.getItem(lastKey);
+        const savedLastId = localStorage.getItem(LAST_PROJECT_ID_KEY);
         const targetId = (savedLastId && state.projects.some(p => p.id === savedLastId))
           ? savedLastId
           : (state.projects[0]?.id || null);
@@ -259,10 +273,13 @@ export default function App() {
   }, []);
 
   // ── Derived Selections ─────────────────────────────────────────────────────
-  const selectedProject = useMemo(
-    () => state.projects.find(p => p.id === selectedProjectId) || state.projects[0] || null,
-    [state.projects, selectedProjectId]
-  );
+  const selectedProject = useMemo(() => {
+    if (selectedProjectId) {
+      const match = state.projects.find(p => p.id === selectedProjectId);
+      if (match) return match;
+    }
+    return state.projects[0] || null;
+  }, [state.projects, selectedProjectId]);
 
   const selectedSection = useMemo(
     () => selectedProject?.sections?.find(s => s.id === selectedSectionId) || null,
@@ -276,11 +293,12 @@ export default function App() {
     return projectSections.reduce((acc, s) => acc + (s.captures?.length || 0), 0);
   }, [projectSections]);
 
-  // ── Track Last Selected Project per Account ────────────────────────────────
+  // ── Track Last Selected Project per Account & Globally ─────────────────────
   useEffect(() => {
     if (selectedProjectId) {
-      const accountKey = currentUser?.uid || 'anonymous';
       try {
+        localStorage.setItem(LAST_PROJECT_ID_KEY, selectedProjectId);
+        const accountKey = currentUser?.uid || 'anonymous';
         localStorage.setItem(getLastProjectStorageKey(accountKey), selectedProjectId);
       } catch (e) {
         console.warn('Failed to save last selected project to localStorage:', e);
@@ -647,7 +665,7 @@ export default function App() {
           selectedProject={selectedProject}
           onOpenProjects={() => setShowOpenProjectsModal(true)}
           onNewProject={() => setShowNewProjectModal(true)}
-          onSelectProject={id => { setSelectedProjectId(id); setSelectedSectionId(null); }}
+          onSelectProject={handleSelectProject}
           onRenameProject={handleRenameProject}
           onDeleteProject={handleDeleteProject}
           sections={projectSections}
@@ -768,7 +786,7 @@ export default function App() {
         <OpenProjectsModal
           projects={state.projects}
           selectedProjectId={selectedProjectId}
-          onSelectProject={id => { setSelectedProjectId(id); setSelectedSectionId(null); }}
+          onSelectProject={handleSelectProject}
           onDeleteProject={handleDeleteProject}
           onNewProject={() => setShowNewProjectModal(true)}
           onClose={() => setShowOpenProjectsModal(false)}

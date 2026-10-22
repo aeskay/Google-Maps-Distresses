@@ -4,8 +4,9 @@
  *
  * Features:
  * - High-contrast "Plain Map" style toggle removing terrain/POI clutter so sections pop.
- * - Prominent pin markers and halo polylines ensuring section locations are clearly visible at all zoom levels.
- * - Google Maps driving route search supporting coordinates and place names without triggering Places API errors.
+ * - Uniform, high-visibility pin markers and halo polylines for all sections.
+ * - Driving route search supporting coordinates and place names.
+ * - Seamless fallback navigation engine when Google Directions API is denied (REQUEST_DENIED).
  * - Proximity analysis: detects which sections fall along or near the driving route (within customizable radius).
  * - "Sections Along Trip" drawer with direct jump to Street View distress inspection.
  */
@@ -93,6 +94,42 @@ const PLAIN_MAP_STYLE = [
   },
 ];
 
+/**
+ * Free OSRM driving route fallback when Google Directions API returns REQUEST_DENIED.
+ */
+async function fetchOsrmDrivingRoute(originCoord, destCoord) {
+  const [oLat, oLng] = originCoord;
+  const [dLat, dLng] = destCoord;
+  const url = `https://router.project-osrm.org/route/v1/driving/${oLng},${oLat};${dLng},${dLat}?overview=full&geometries=geojson`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Public routing engine unavailable');
+  const data = await res.json();
+  if (data.code !== 'Ok' || !data.routes || data.routes.length === 0) {
+    throw new Error('No driving route found between these points');
+  }
+
+  const route = data.routes[0];
+  // OSRM coordinates are [lng, lat]
+  const pathCoords = route.geometry.coordinates.map(([lng, lat]) => [
+    Number(lat.toFixed(6)),
+    Number(lng.toFixed(6)),
+  ]);
+
+  const distanceMiles = Number((route.distance / 1609.344).toFixed(1));
+  const totalSeconds = route.duration;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.round((totalSeconds % 3600) / 60);
+  const durationText = hours > 0 ? `${hours} hr ${minutes} min` : `${minutes} min`;
+
+  return {
+    pathCoords,
+    distanceMiles,
+    durationText,
+    summary: `${distanceMiles} miles (~${durationText})`,
+  };
+}
+
 export default function ProjectRouteMapTab({
   project,
   sections = [],
@@ -109,6 +146,10 @@ export default function ProjectRouteMapTab({
   const markersMapRef = useRef(new Map());
   const infoWindowRef = useRef(null);
 
+  // Fallback route polyline and waypoint markers
+  const fallbackPolylineRef = useRef(null);
+  const fallbackMarkersRef = useRef([]);
+
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const [mapsError, setMapsError] = useState(null);
 
@@ -124,7 +165,6 @@ export default function ProjectRouteMapTab({
 
   // Computed Directions Result
   const [directionsData, setDirectionsData] = useState(null);
-  const [routeWaypoints, setRouteWaypoints] = useState([]);
 
   // Proximity & Filter State
   const [proximityMiles, setProximityMiles] = useState(10);
@@ -164,7 +204,7 @@ export default function ProjectRouteMapTab({
       tilt: 0,
       streetViewControl: true,
       fullscreenControl: false,
-      mapTypeControl: false, // We supply custom Plain / Roadmap / Satellite buttons
+      mapTypeControl: false, // Custom segmented toggle
     });
 
     googleMapRef.current = map;
@@ -253,7 +293,7 @@ export default function ProjectRouteMapTab({
       .sort((a, b) => (a.routeProgressFraction ?? 0) - (b.routeProgressFraction ?? 0));
   }, [sectionsWithProximity, directionsData]);
 
-  // ── Render High-Contrast Polylines & Pin Markers on Google Map ────────────
+  // ── Render Uniform High-Contrast Polylines & Pin Markers on Map ───────────
   useEffect(() => {
     if (!googleMapRef.current || !window.google?.maps) return;
     const gMaps = window.google.maps;
@@ -262,6 +302,9 @@ export default function ProjectRouteMapTab({
     const markerMap = markersMapRef.current;
 
     const currentSecIds = new Set();
+
+    // Uniform clean blue for all sections (no right/left/single differentiation)
+    const defaultColor = '#2563eb';
 
     sectionsWithProximity.forEach((sec) => {
       const secId = String(sec.id);
@@ -274,11 +317,6 @@ export default function ProjectRouteMapTab({
       const hasRoute = !!directionsData;
       const isNearby = sec.isNearby;
 
-      // Color coding:
-      // Right (R): Orange #ea580c | Left (L): Sky Blue #0284c7 | Single/Other: Emerald #10b981
-      const roadbed = sec.coordinates?.roadbed;
-      const defaultColor = roadbed === 'R' ? '#ea580c' : roadbed === 'L' ? '#0284c7' : '#10b981';
-
       let strokeColor = defaultColor;
       let coreWeight = 5;
       let haloWeight = 9;
@@ -287,13 +325,13 @@ export default function ProjectRouteMapTab({
 
       if (hasRoute) {
         if (isNearby) {
-          strokeColor = '#059669'; // Bold Emerald
+          strokeColor = '#059669'; // Bold Emerald for on/near route
           coreWeight = 7;
           haloWeight = 12;
           strokeOpacity = 1.0;
           zIndex = 100;
         } else {
-          strokeColor = '#94a3b8'; // Muted Slate
+          strokeColor = '#94a3b8'; // Muted Slate for off-route
           coreWeight = 2;
           haloWeight = 4;
           strokeOpacity = 0.4;
@@ -303,11 +341,10 @@ export default function ProjectRouteMapTab({
 
       const isVisible = !(hasRoute && onlyShowNearby && !isNearby);
 
-      // ── 1. Polyline Rendering (Dual-layer: White Halo casing + Vibrant Core)
+      // ── 1. Polyline (Dual-layer: White Halo casing + Core line)
       let polyEntry = polyMap.get(secId);
 
       if (!polyEntry) {
-        // Outer halo / casing line for high contrast
         const haloPoly = new gMaps.Polyline({
           path: pathLatLngs,
           strokeColor: '#ffffff',
@@ -317,7 +354,6 @@ export default function ProjectRouteMapTab({
           map,
         });
 
-        // Vibrant core line
         const corePoly = new gMaps.Polyline({
           path: pathLatLngs,
           strokeColor,
@@ -350,7 +386,7 @@ export default function ProjectRouteMapTab({
         polyEntry.sec = sec;
       }
 
-      // ── 2. Prominent Section Pin Marker (Visible even at high orbit / state zoom)
+      // ── 2. Uniform Section Pin Marker (Identical dots for all sections)
       const markerPos = pathLatLngs[0];
       let markerEntry = markerMap.get(secId);
 
@@ -452,9 +488,6 @@ export default function ProjectRouteMapTab({
         <div style="font-family:sans-serif; min-width:210px; max-width:280px; padding:4px 0;">
           <div style="font-weight:700; font-size:14px; color:#0f172a; margin-bottom:2px;">
             ${sec.highway || 'Highway Section'}
-            <span style="font-size:11px; font-weight:600; background:#f1f5f9; padding:2px 6px; border-radius:4px; margin-left:4px;">
-              ${sec.coordinates?.roadbed || ''}
-            </span>
           </div>
           <div style="font-size:12px; color:#475569; margin-bottom:6px;">ID: ${sec.id}</div>
           ${distNote}
@@ -490,7 +523,41 @@ export default function ProjectRouteMapTab({
     [onSelectSection, onNavigateToTab]
   );
 
-  // ── Calculate Driving Route via DirectionsService ──────────────────────────
+  // ── Helper to resolve an input string to [lat, lng] ────────────────────────
+  const resolveCoord = useCallback(async (inputStr, gMaps) => {
+    const trimmed = (inputStr || '').trim();
+    if (!trimmed) return null;
+
+    // Check if input is GPS coordinates
+    const parsed = parseCoordinatesInput(trimmed);
+    if (parsed && !isNaN(parsed.lat) && !isNaN(parsed.lng)) {
+      return [parsed.lat, parsed.lng];
+    }
+
+    // Otherwise use Google Geocoder
+    if (gMaps?.Geocoder) {
+      try {
+        const geocoder = new gMaps.Geocoder();
+        const res = await new Promise((resolve) => {
+          geocoder.geocode({ address: trimmed }, (results, status) => {
+            if (status === 'OK' && results?.[0]?.geometry?.location) {
+              const loc = results[0].geometry.location;
+              resolve([loc.lat(), loc.lng()]);
+            } else {
+              resolve(null);
+            }
+          });
+        });
+        if (res) return res;
+      } catch (err) {
+        console.warn('Geocoding error:', err);
+      }
+    }
+
+    return null;
+  }, []);
+
+  // ── Calculate Driving Route (Google Directions with Seamless OSRM Fallback) ─
   const handleCalculateRoute = useCallback(
     async (e) => {
       if (e) e.preventDefault();
@@ -509,43 +576,100 @@ export default function ProjectRouteMapTab({
 
       setIsCalculatingRoute(true);
       const gMaps = window.google.maps;
-      const directionsService = new gMaps.DirectionsService();
+      const map = googleMapRef.current;
 
-      // Resolve coordinates or address string
-      const parseLocation = (input) => {
-        const coords = parseCoordinatesInput(input);
-        if (coords && !isNaN(coords.lat) && !isNaN(coords.lng)) {
-          return new gMaps.LatLng(coords.lat, coords.lng);
+      // Clear any previous fallback polyline & markers
+      if (fallbackPolylineRef.current) {
+        fallbackPolylineRef.current.setMap(null);
+        fallbackPolylineRef.current = null;
+      }
+      fallbackMarkersRef.current.forEach((m) => m.setMap(null));
+      fallbackMarkersRef.current = [];
+
+      // Resolve coordinates
+      const [oCoord, dCoord] = await Promise.all([
+        resolveCoord(origin, gMaps),
+        resolveCoord(destination, gMaps),
+      ]);
+
+      const applyFallbackRoute = async () => {
+        if (!oCoord || !dCoord) {
+          throw new Error('Could not resolve GPS coordinates for origin or destination.');
         }
-        return input;
+
+        const fallback = await fetchOsrmDrivingRoute(oCoord, dCoord);
+
+        // Draw driving path on map
+        const pathLatLngs = fallback.pathCoords.map(([lat, lng]) => ({ lat, lng }));
+
+        const poly = new gMaps.Polyline({
+          path: pathLatLngs,
+          strokeColor: '#2563eb',
+          strokeWeight: 6,
+          strokeOpacity: 0.9,
+          zIndex: 60,
+          map,
+        });
+        fallbackPolylineRef.current = poly;
+
+        // Place Origin and Destination Pins
+        const originMarker = new gMaps.Marker({
+          position: { lat: oCoord[0], lng: oCoord[1] },
+          map,
+          label: { text: 'A', color: '#ffffff', fontWeight: 'bold' },
+          title: `Origin: ${origin}`,
+          zIndex: 70,
+        });
+        const destMarker = new gMaps.Marker({
+          position: { lat: dCoord[0], lng: dCoord[1] },
+          map,
+          label: { text: 'B', color: '#ffffff', fontWeight: 'bold' },
+          title: `Destination: ${destination}`,
+          zIndex: 70,
+        });
+        fallbackMarkersRef.current = [originMarker, destMarker];
+
+        // Fit map bounds
+        const bounds = new gMaps.LatLngBounds();
+        pathLatLngs.forEach((pt) => bounds.extend(pt));
+        map.fitBounds(bounds, 50);
+
+        setDirectionsData({
+          pathCoords: fallback.pathCoords,
+          distanceMiles: fallback.distanceMiles,
+          durationText: fallback.durationText,
+          summary: `${fallback.distanceMiles} mi via driving road corridor`,
+        });
+
+        addToast?.(
+          'info',
+          'Route Planned',
+          `${fallback.distanceMiles} miles (~${fallback.durationText}). Finding sections along your route.`
+        );
       };
 
-      const originParam = parseLocation(origin);
-      const destParam = parseLocation(destination);
+      // Try Google DirectionsService first
+      const directionsService = new gMaps.DirectionsService();
+      const originParam = oCoord ? new gMaps.LatLng(oCoord[0], oCoord[1]) : origin;
+      const destParam = dCoord ? new gMaps.LatLng(dCoord[0], dCoord[1]) : destination;
 
       directionsService.route(
         {
           origin: originParam,
           destination: destParam,
           travelMode: gMaps.TravelMode.DRIVING,
-          optimizeWaypoints: false,
         },
-        (result, status) => {
-          setIsCalculatingRoute(false);
-
+        async (result, status) => {
           if (status === gMaps.DirectionsStatus.OK && result) {
-            // Render on map
+            setIsCalculatingRoute(false);
             directionsRendererRef.current?.setDirections(result);
 
             const route = result.routes[0];
-
-            // Extract all route coordinates
             const pathCoords = route.overview_path.map((pt) => [
               Number(pt.lat().toFixed(6)),
               Number(pt.lng().toFixed(6)),
             ]);
 
-            // Total distance & duration
             let totalMeters = 0;
             let totalSeconds = 0;
             route.legs.forEach((l) => {
@@ -573,19 +697,24 @@ export default function ProjectRouteMapTab({
               `${distanceMiles} miles (~${durationText}). Finding project sections along your route.`
             );
           } else {
-            console.error('Directions request status:', status);
-            addToast?.(
-              'error',
-              'Route Failed',
-              status === 'NOT_FOUND' || status === 'ZERO_RESULTS'
-                ? 'Could not find a driving route between these two locations. Check coordinates or spelling.'
-                : `Driving directions error (${status}).`
-            );
+            console.warn(`Google Directions returned ${status}. Attempting seamless driving route fallback.`);
+            try {
+              await applyFallbackRoute();
+            } catch (err) {
+              console.error('Routing failed:', err);
+              addToast?.(
+                'error',
+                'Route Failed',
+                'Unable to calculate driving route. Please verify GPS coordinates or location spelling.'
+              );
+            } finally {
+              setIsCalculatingRoute(false);
+            }
           }
         }
       );
     },
-    [originText, destText, addToast]
+    [originText, destText, resolveCoord, addToast]
   );
 
   // ── Clear Route ───────────────────────────────────────────────────────────
@@ -593,8 +722,14 @@ export default function ProjectRouteMapTab({
     if (directionsRendererRef.current) {
       directionsRendererRef.current.set('directions', null);
     }
+    if (fallbackPolylineRef.current) {
+      fallbackPolylineRef.current.setMap(null);
+      fallbackPolylineRef.current = null;
+    }
+    fallbackMarkersRef.current.forEach((m) => m.setMap(null));
+    fallbackMarkersRef.current = [];
+
     setDirectionsData(null);
-    setRouteWaypoints([]);
     infoWindowRef.current?.close();
     setActiveSectionPopup(null);
     fitProjectBounds();
@@ -672,10 +807,10 @@ export default function ProjectRouteMapTab({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           {/* Title & Overview Badge */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 18 }}>🛣️</span>
+            <span style={{ fontSize: 18 }}>🗺️</span>
             <div>
               <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>
-                Travel Route & Project Sections Map
+                Project Sections & Travel Map
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                 {mappedCount} of {sections.length} sections mapped across Texas highway network
@@ -952,62 +1087,6 @@ export default function ProjectRouteMapTab({
           ) : (
             <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
           )}
-
-          {/* Map Floating Legend */}
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 24,
-              left: 20,
-              background: 'rgba(255, 255, 255, 0.94)',
-              backdropFilter: 'blur(8px)',
-              padding: '8px 12px',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-default)',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
-              fontSize: 11,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 4,
-              pointerEvents: 'none',
-              zIndex: 5,
-            }}
-          >
-            <div style={{ fontWeight: 700, fontSize: 10, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-              Legend
-            </div>
-            {directionsData ? (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 14, height: 4, background: '#2563eb', borderRadius: 2 }} />
-                  <span>Driving Route</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#059669', border: '1px solid #fff' }} />
-                  <span style={{ fontWeight: 600, color: '#059669' }}>Within {proximityMiles} mi of route</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#94a3b8' }} />
-                  <span style={{ color: '#64748b' }}>Other Project Sections</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ea580c', border: '1px solid #fff' }} />
-                  <span>Right Roadbed (R)</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#0284c7', border: '1px solid #fff' }} />
-                  <span>Left Roadbed (L)</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', border: '1px solid #fff' }} />
-                  <span>Single / Other</span>
-                </div>
-              </>
-            )}
-          </div>
         </div>
 
         {/* ── Right Drawer: Sections Along Travel Route ── */}
@@ -1116,19 +1195,6 @@ export default function ProjectRouteMapTab({
                             <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
                               {sec.highway}
                             </span>
-                            {sec.coordinates?.roadbed && (
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  fontWeight: 600,
-                                  background: 'var(--bg-elevated)',
-                                  padding: '1px 5px',
-                                  borderRadius: 4,
-                                }}
-                              >
-                                {sec.coordinates.roadbed}
-                              </span>
-                            )}
                           </div>
 
                           {/* Off-route proximity badge */}
