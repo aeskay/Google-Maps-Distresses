@@ -107,23 +107,33 @@ export default function Sidebar({
 
       {/* Active Project Card */}
       <div className="sidebar__section">
-        <div className="sidebar__section-title">
+        <div className="sidebar__section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>Active Project</span>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {onOpenProjects && (
-              <button
-                className="btn btn--secondary btn--xs"
-                onClick={onOpenProjects}
-                title="Switch or browse projects"
-              >
-                📁 Projects ({projects.length})
-              </button>
-            )}
-          </div>
+          {onOpenProjects && (
+            <button
+              className="btn btn--ghost btn--xs"
+              onClick={onOpenProjects}
+              title="Open or change project folder"
+              style={{ fontSize: 11, padding: '2px 6px', fontWeight: 600 }}
+            >
+              Change 📁
+            </button>
+          )}
         </div>
 
         {activeProj ? (
-          <div>
+          <div
+            onClick={onOpenProjects}
+            style={{
+              cursor: 'pointer',
+              padding: '6px 8px',
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-default)',
+              transition: 'background 0.15s ease',
+            }}
+            title="Click to switch or browse project folders"
+          >
             <div
               style={{
                 fontWeight: 600,
@@ -136,9 +146,8 @@ export default function Sidebar({
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}
-              title={activeProj.name}
             >
-              <span style={{ color: 'var(--accent-primary)', fontSize: 13 }}>📁</span>
+              <span style={{ fontSize: 13 }}>📁</span>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeProj.name}</span>
             </div>
 
@@ -146,7 +155,7 @@ export default function Sidebar({
               style={{
                 fontSize: 11,
                 color: 'var(--text-muted)',
-                marginTop: 4,
+                marginTop: 3,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
@@ -158,16 +167,6 @@ export default function Sidebar({
                 {totalCaptures} capture{totalCaptures === 1 ? '' : 's'}
               </span>
             </div>
-
-            {onOpenProjects && (
-              <button
-                className="btn btn--secondary btn--sm"
-                style={{ marginTop: 8, width: '100%', justifyContent: 'center', fontSize: 11 }}
-                onClick={onOpenProjects}
-              >
-                Switch Project…
-              </button>
-            )}
           </div>
         ) : (
           <div>

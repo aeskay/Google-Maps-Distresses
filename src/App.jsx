@@ -13,6 +13,7 @@ import ConditionTab from './components/tabs/ConditionTab';
 import HeatmapTab from './components/tabs/HeatmapTab';
 import CapturesTab from './components/tabs/CapturesTab';
 import DataTab from './components/tabs/DataTab';
+import ProjectRouteMapTab from './components/tabs/ProjectRouteMapTab';
 import ToastContainer from './components/ToastContainer';
 
 import NewProjectModal from './components/modals/NewProjectModal';
@@ -37,6 +38,7 @@ const TABS = [
   { id: 'condition', label: 'Condition',         icon: '📊' },
   { id: 'heatmap',   label: 'Heatmap',           icon: '🔥' },
   { id: 'data',      label: 'Data Table',        icon: '📋' },
+  { id: 'routeMap',  label: 'Route & Project Map', icon: '🛣️' },
 ];
 
 const WORKING_STATE_KEY = 'txdot-distress:working-state';
@@ -737,6 +739,18 @@ export default function App() {
               onDeleteSections={handleDeleteSections}
               onUpdateProject={handleUpdateProject}
               addToast={addToast}
+            />
+          </div>
+
+          <div style={{ display: activeTab === 'routeMap' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+            <ProjectRouteMapTab
+              project={selectedProject}
+              sections={projectSections}
+              selectedSectionId={selectedSectionId}
+              onSelectSection={handleSelectSection}
+              onNavigateToTab={setActiveTab}
+              addToast={addToast}
+              activeTab={activeTab}
             />
           </div>
         </div>
