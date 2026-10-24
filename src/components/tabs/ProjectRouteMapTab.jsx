@@ -150,6 +150,12 @@ export default function ProjectRouteMapTab({
   const fallbackPolylineRef = useRef(null);
   const fallbackMarkersRef = useRef([]);
 
+  // User Device Location & Right-click feedback refs
+  const userLocationMarkerRef = useRef(null);
+  const userLocationCircleRef = useRef(null);
+  const userLocationWatchIdRef = useRef(null);
+  const copiedBadgeTimerRef = useRef(null);
+
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const [mapsError, setMapsError] = useState(null);
 
@@ -162,6 +168,11 @@ export default function ProjectRouteMapTab({
   const [destText, setDestText] = useState('');
   const [isCalculatingRoute, setIsCalculatingRoute] = useState(false);
   const [isLocatingUser, setIsLocatingUser] = useState(false);
+  const [isLocationActive, setIsLocationActive] = useState(false);
+  const [userLocation, setUserLocation] = useState(null); // { lat, lng, accuracy }
+
+  // Right-click copied coordinates feedback badge
+  const [copiedCoordsBadge, setCopiedCoordsBadge] = useState(null); // { text, x, y }
 
   // Computed Directions Result
   const [directionsData, setDirectionsData] = useState(null);
@@ -171,6 +182,222 @@ export default function ProjectRouteMapTab({
   const [onlyShowNearby, setOnlyShowNearby] = useState(false);
   const [activeSectionPopup, setActiveSectionPopup] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
+  // ── Right-Click to Copy Coordinates ───────────────────────────────────────
+  const handleMapRightClick = useCallback((e) => {
+    if (!e || !e.latLng) return;
+    const lat = typeof e.latLng.lat === 'function' ? e.latLng.lat() : e.latLng.lat;
+    const lng = typeof e.latLng.lng === 'function' ? e.latLng.lng() : e.latLng.lng;
+    if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) return;
+
+    const coordText = `${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
+
+    // Copy to clipboard with fallback
+    const copyToClipboard = async () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(coordText);
+        } else {
+          throw new Error('Clipboard API not available');
+        }
+      } catch {
+        try {
+          const textarea = document.createElement('textarea');
+          textarea.value = coordText;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.focus();
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        } catch (err) {
+          console.warn('Fallback copy failed:', err);
+        }
+      }
+    };
+
+    copyToClipboard();
+    addToast?.('success', 'Coordinates Copied', `${coordText} copied to clipboard!`, 2500);
+
+    // Position floating feedback badge on map canvas
+    if (mapContainerRef.current) {
+      const rect = mapContainerRef.current.getBoundingClientRect();
+      let x = rect.width / 2;
+      let y = rect.height / 2;
+      if (e.domEvent && typeof e.domEvent.clientX === 'number') {
+        x = e.domEvent.clientX - rect.left;
+        y = e.domEvent.clientY - rect.top;
+      }
+      setCopiedCoordsBadge({ text: coordText, x, y });
+      if (copiedBadgeTimerRef.current) clearTimeout(copiedBadgeTimerRef.current);
+      copiedBadgeTimerRef.current = setTimeout(() => {
+        setCopiedCoordsBadge(null);
+      }, 2000);
+    }
+  }, [addToast]);
+
+  // ── User Device Location Tracking ──────────────────────────────────────────
+  const renderUserLocation = useCallback((lat, lng, accuracy, panTo = false) => {
+    if (!googleMapRef.current || !window.google?.maps) return;
+    const gMaps = window.google.maps;
+    const map = googleMapRef.current;
+
+    // Animated blue pulsing GPS dot
+    const userLocationSvg = `
+      <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="20" cy="20" r="16" fill="rgba(37, 99, 235, 0.25)" stroke="rgba(37, 99, 235, 0.6)" stroke-width="1.5">
+          <animate attributeName="r" values="10;18;10" dur="2s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.8;0.2;0.8" dur="2s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="20" cy="20" r="7.5" fill="#2563eb" stroke="#ffffff" stroke-width="2.5"/>
+      </svg>
+    `;
+
+    const icon = {
+      url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(userLocationSvg)}`,
+      scaledSize: new gMaps.Size(40, 40),
+      anchor: new gMaps.Point(20, 20),
+    };
+
+    if (userLocationMarkerRef.current) {
+      userLocationMarkerRef.current.setPosition({ lat, lng });
+      userLocationMarkerRef.current.setTitle(`Your Current Location (±${Math.round(accuracy)}m)`);
+      userLocationMarkerRef.current.setMap(map);
+    } else {
+      const marker = new gMaps.Marker({
+        position: { lat, lng },
+        map,
+        title: `Your Current Location (±${Math.round(accuracy)}m)`,
+        icon,
+        zIndex: 3000,
+      });
+
+      marker.addListener('click', () => {
+        addToast?.('info', 'Your Location', `${lat.toFixed(6)}, ${lng.toFixed(6)} (±${Math.round(accuracy)}m)`);
+      });
+
+      marker.addListener('rightclick', handleMapRightClick);
+
+      userLocationMarkerRef.current = marker;
+    }
+
+    // Accuracy Circle
+    if (accuracy && accuracy > 0) {
+      if (userLocationCircleRef.current) {
+        userLocationCircleRef.current.setCenter({ lat, lng });
+        userLocationCircleRef.current.setRadius(accuracy);
+        userLocationCircleRef.current.setMap(map);
+      } else {
+        userLocationCircleRef.current = new gMaps.Circle({
+          strokeColor: '#3b82f6',
+          strokeOpacity: 0.45,
+          strokeWeight: 1.5,
+          fillColor: '#3b82f6',
+          fillOpacity: 0.12,
+          map,
+          center: { lat, lng },
+          radius: accuracy,
+          zIndex: 2999,
+          clickable: false,
+        });
+      }
+    }
+
+    if (panTo) {
+      map.panTo({ lat, lng });
+      if (map.getZoom() < 14) {
+        map.setZoom(15);
+      }
+    }
+  }, [addToast, handleMapRightClick]);
+
+  const handleLocateUser = useCallback(() => {
+    if (!navigator.geolocation) {
+      addToast?.('error', 'Geolocation Unavailable', 'Your browser does not support geolocation.');
+      return;
+    }
+
+    if (!googleMapRef.current || !window.google?.maps) {
+      addToast?.('warning', 'Map Loading', 'Google Maps is still initializing. Please wait a moment.');
+      return;
+    }
+
+    // If location is already active and known, pan immediately
+    if (isLocationActive && userLocation) {
+      renderUserLocation(userLocation.lat, userLocation.lng, userLocation.accuracy, true);
+      addToast?.('info', 'Current Location', `Re-centered on your location (${userLocation.lat.toFixed(5)}, ${userLocation.lng.toFixed(5)}).`);
+    }
+
+    setIsLocatingUser(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setIsLocatingUser(false);
+        setIsLocationActive(true);
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const accuracy = position.coords.accuracy || 20;
+
+        setUserLocation({ lat, lng, accuracy });
+        renderUserLocation(lat, lng, accuracy, true);
+        addToast?.('success', 'Location Found', `Centered on your location (${lat.toFixed(5)}, ${lng.toFixed(5)}).`);
+
+        // Start background watch so the blue dot stays in sync as the user moves
+        if (!userLocationWatchIdRef.current) {
+          userLocationWatchIdRef.current = navigator.geolocation.watchPosition(
+            (pos) => {
+              const wLat = pos.coords.latitude;
+              const wLng = pos.coords.longitude;
+              const wAcc = pos.coords.accuracy || 20;
+              setUserLocation({ lat: wLat, lng: wLng, accuracy: wAcc });
+              renderUserLocation(wLat, wLng, wAcc, false);
+            },
+            (err) => {
+              console.warn('Geolocation watch error:', err);
+            },
+            { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+          );
+        }
+      },
+      (err) => {
+        setIsLocatingUser(false);
+        console.warn('Geolocation error:', err);
+        let msg = 'Could not get your current location.';
+        if (err.code === 1) {
+          msg = 'Location permission was denied. Please allow location access in your browser settings.';
+        } else if (err.code === 2) {
+          msg = 'Location information is unavailable.';
+        } else if (err.code === 3) {
+          msg = 'Location request timed out.';
+        }
+        addToast?.('warning', 'Location Unavailable', msg);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  }, [isLocationActive, userLocation, renderUserLocation, addToast]);
+
+  // Clean up location markers on unmount
+  useEffect(() => {
+    return () => {
+      if (userLocationWatchIdRef.current != null) {
+        navigator.geolocation?.clearWatch(userLocationWatchIdRef.current);
+        userLocationWatchIdRef.current = null;
+      }
+      if (userLocationMarkerRef.current) {
+        userLocationMarkerRef.current.setMap(null);
+        userLocationMarkerRef.current = null;
+      }
+      if (userLocationCircleRef.current) {
+        userLocationCircleRef.current.setMap(null);
+        userLocationCircleRef.current = null;
+      }
+      if (copiedBadgeTimerRef.current) {
+        clearTimeout(copiedBadgeTimerRef.current);
+        copiedBadgeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // ── Load Google Maps JS API ───────────────────────────────────────────────
   useEffect(() => {
@@ -224,7 +451,24 @@ export default function ProjectRouteMapTab({
 
     // Info Window
     infoWindowRef.current = new gMaps.InfoWindow();
-  }, [mapsLoaded]);
+
+    // Right-click anywhere on Google Map to copy coordinates
+    map.addListener('rightclick', (e) => {
+      handleMapRightClick(e);
+    });
+
+    // Prevent native browser context menu from covering map canvas on right-click
+    const mapContainerEl = mapContainerRef.current;
+    const handleContextMenu = (e) => e.preventDefault();
+    if (mapContainerEl) {
+      mapContainerEl.addEventListener('contextmenu', handleContextMenu);
+    }
+
+    // Re-render user location if it was already active
+    if (userLocation) {
+      renderUserLocation(userLocation.lat, userLocation.lng, userLocation.accuracy, false);
+    }
+  }, [mapsLoaded, handleMapRightClick, renderUserLocation, userLocation]);
 
   // ── Apply Map Style Toggle (Plain vs Roadmap vs Hybrid) ───────────────────
   useEffect(() => {
@@ -366,6 +610,8 @@ export default function ProjectRouteMapTab({
         const clickHandler = (e) => handleSectionClick(sec, e.latLng);
         corePoly.addListener('click', clickHandler);
         haloPoly.addListener('click', clickHandler);
+        corePoly.addListener('rightclick', handleMapRightClick);
+        haloPoly.addListener('rightclick', handleMapRightClick);
 
         polyMap.set(secId, { corePoly, haloPoly, sec });
       } else {
@@ -412,6 +658,7 @@ export default function ProjectRouteMapTab({
         });
 
         marker.addListener('click', () => handleSectionClick(sec, markerPos));
+        marker.addListener('rightclick', handleMapRightClick);
         markerMap.set(secId, { marker, sec });
       } else {
         markerEntry.marker.setPosition(markerPos);
@@ -436,7 +683,7 @@ export default function ProjectRouteMapTab({
         markerMap.delete(id);
       }
     }
-  }, [sectionsWithProximity, directionsData, onlyShowNearby, showSectionMarkers]);
+  }, [sectionsWithProximity, directionsData, onlyShowNearby, showSectionMarkers, handleMapRightClick]);
 
   // ── Fit Map Bounds to Project Sections ────────────────────────────────────
   const fitProjectBounds = useCallback(() => {
@@ -610,6 +857,7 @@ export default function ProjectRouteMapTab({
           zIndex: 60,
           map,
         });
+        poly.addListener('rightclick', handleMapRightClick);
         fallbackPolylineRef.current = poly;
 
         // Place Origin and Destination Pins
@@ -620,6 +868,8 @@ export default function ProjectRouteMapTab({
           title: `Origin: ${origin}`,
           zIndex: 70,
         });
+        originMarker.addListener('rightclick', handleMapRightClick);
+
         const destMarker = new gMaps.Marker({
           position: { lat: dCoord[0], lng: dCoord[1] },
           map,
@@ -627,6 +877,7 @@ export default function ProjectRouteMapTab({
           title: `Destination: ${destination}`,
           zIndex: 70,
         });
+        destMarker.addListener('rightclick', handleMapRightClick);
         fallbackMarkersRef.current = [originMarker, destMarker];
 
         // Fit map bounds
@@ -752,9 +1003,13 @@ export default function ProjectRouteMapTab({
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setIsLocatingUser(false);
+        setIsLocationActive(true);
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
+        const accuracy = pos.coords.accuracy || 20;
         setOriginText(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+        setUserLocation({ lat, lng, accuracy });
+        renderUserLocation(lat, lng, accuracy, true);
         addToast?.('info', 'Location Set', 'Origin set to your current GPS position.');
       },
       (err) => {
@@ -763,7 +1018,7 @@ export default function ProjectRouteMapTab({
       },
       { timeout: 10000, enableHighAccuracy: true }
     );
-  }, [addToast]);
+  }, [addToast, renderUserLocation]);
 
   // ── Pan and Zoom to a Specific Section ────────────────────────────────────
   const handleFocusSection = useCallback(
@@ -858,6 +1113,28 @@ export default function ProjectRouteMapTab({
                 🛰️ Satellite
               </button>
             </div>
+
+            {/* My Location GPS Button */}
+            <button
+              type="button"
+              className={`btn btn--xs ${isLocationActive ? 'btn--primary' : 'btn--ghost'}`}
+              onClick={handleLocateUser}
+              disabled={isLocatingUser}
+              title={isLocationActive ? "Re-center map on your location" : "Show my current location on map"}
+              style={{
+                fontSize: 11,
+                padding: '3px 9px',
+                borderRadius: 'var(--radius-sm)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontWeight: isLocationActive ? 700 : 500,
+                boxShadow: isLocationActive ? '0 0 8px rgba(37, 99, 235, 0.4)' : 'none',
+              }}
+            >
+              <span>📍</span>
+              <span>{isLocatingUser ? 'Locating...' : 'My Location'}</span>
+            </button>
 
             {/* Toggle Section Markers */}
             <button
@@ -1065,6 +1342,77 @@ export default function ProjectRouteMapTab({
       <div style={{ display: 'flex', flex: 1, minHeight: 0, position: 'relative' }}>
         {/* Google Map Container */}
         <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+          {/* Floating My Location Map Button */}
+          {!mapsError && (
+            <button
+              type="button"
+              onClick={handleLocateUser}
+              disabled={isLocatingUser}
+              title={isLocationActive ? "Re-center map on your location" : "Show my current location"}
+              aria-label="Show my current location"
+              style={{
+                position: 'absolute',
+                top: 14,
+                right: 14,
+                zIndex: 25,
+                width: 38,
+                height: 38,
+                borderRadius: '50%',
+                background: isLocationActive ? 'var(--accent-primary, #2563eb)' : 'var(--bg-surface, #ffffff)',
+                color: isLocationActive ? '#ffffff' : 'var(--text-primary, #1e293b)',
+                border: isLocationActive ? '2px solid #ffffff' : '1.5px solid var(--border-default, #cbd5e1)',
+                boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: isLocatingUser ? 'wait' : 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {isLocatingUser ? (
+                <span style={{ fontSize: 14 }}>⏳</span>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <line x1="12" y1="2" x2="12" y2="6" />
+                  <line x1="12" y1="18" x2="12" y2="22" />
+                  <line x1="2" y1="12" x2="6" y2="12" />
+                  <line x1="18" y1="12" x2="22" y2="12" />
+                </svg>
+              )}
+            </button>
+          )}
+
+          {/* Right-click Copied Coordinates Floating Badge */}
+          {copiedCoordsBadge && (
+            <div
+              style={{
+                position: 'absolute',
+                left: Math.max(90, Math.min(copiedCoordsBadge.x, (mapContainerRef.current?.clientWidth || 400) - 90)),
+                top: Math.max(30, copiedCoordsBadge.y - 12),
+                transform: 'translate(-50%, -100%)',
+                background: 'rgba(15, 23, 42, 0.94)',
+                backdropFilter: 'blur(8px)',
+                border: '1.5px solid #10b981',
+                color: '#ffffff',
+                padding: '5px 12px',
+                borderRadius: '8px',
+                fontSize: 12,
+                fontWeight: 700,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.4), 0 0 10px rgba(16, 185, 129, 0.3)',
+                pointerEvents: 'none',
+                zIndex: 100,
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <span style={{ color: '#10b981', fontSize: 13 }}>✓ Copied</span>
+              <span style={{ color: '#f8fafc', fontWeight: 600 }}>{copiedCoordsBadge.text}</span>
+            </div>
+          )}
+
           {mapsError ? (
             <div
               style={{
