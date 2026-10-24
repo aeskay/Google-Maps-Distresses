@@ -70,6 +70,10 @@ export default function MapTab({
   const captureMarkersRef = useRef([]);
   const currentLocationMarkerRef = useRef(null);
   const currentLocationDotRef = useRef(null);
+  const userLocationMarkerRef = useRef(null);
+  const userLocationCircleRef = useRef(null);
+  const userLocationWatchIdRef = useRef(null);
+  const copiedBadgeTimerRef = useRef(null);
   const splitContainerRef = useRef(null);
   const focusSectionTimerRef = useRef(null);
   const lastMapClickTimeRef = useRef(0);
@@ -77,6 +81,14 @@ export default function MapTab({
   const [mapsLoaded, setMapsLoaded] = useState(false);
   const [mapsError, setMapsError] = useState(null);
   const [mapInstanceVersion, setMapInstanceVersion] = useState(0);
+
+  // User Device Location Tracking
+  const [isLocatingUser, setIsLocatingUser] = useState(false);
+  const [isLocationActive, setIsLocationActive] = useState(false);
+  const [userLocation, setUserLocation] = useState(null); // { lat, lng, accuracy }
+
+  // Right-click copied coordinates feedback badge
+  const [copiedCoordsBadge, setCopiedCoordsBadge] = useState(null); // { text, x, y }
 
   // View Layout: 'split' | 'pano-only' | 'map-only'
   const [viewLayout, setViewLayout] = useState('split');
@@ -99,6 +111,7 @@ export default function MapTab({
   const [currentImageYear, setCurrentImageYear] = useState(''); // e.g. "2021"
   const [availableDates, setAvailableDates] = useState([]); // Array of { pano, date, year, label }
   const [isLoadingDates, setIsLoadingDates] = useState(false);
+  const [streetViewStatus, setStreetViewStatus] = useState('OK'); // 'OK' | 'ZERO_RESULTS'
 
   // Collapsible HUD panel (toggle hide and show)
   const [isHudCollapsed, setIsHudCollapsed] = useState(false);
@@ -222,14 +235,103 @@ export default function MapTab({
       });
   }, []);
 
+  // ── Apply Street View Metadata & Historical Panoramas from API Data ────────
+  const applyPanoData = useCallback((data, explicitPanoId = '') => {
+    if (!data) return;
+    const activePano = data.location?.pano || explicitPanoId || '';
+    if (activePano) {
+      setCurrentPanoId(activePano);
+      lastFetchedPanoRef.current = activePano;
+    }
+
+    const rawDate = data.imageDate || '';
+    setCurrentImageDate(rawDate);
+    const year = rawDate ? rawDate.split('-')[0] : '';
+    setCurrentImageYear(year);
+
+    // Parse historical panos from data.time (undocumented Google Street View history array)
+    const times = Array.isArray(data.time) ? data.time : [];
+    const parsed = [];
+
+    times.forEach((item) => {
+      if (!item || !item.pano) return;
+      const dateKey = Object.keys(item).find(k => k !== 'pano');
+      const val = dateKey ? item[dateKey] : null;
+      let dateObj = null;
+      if (val instanceof Date) {
+        dateObj = val;
+      } else if (val) {
+        const parsedD = new Date(val);
+        if (!isNaN(parsedD.getTime())) dateObj = parsedD;
+      }
+
+      let dStr = '';
+      let yStr = '';
+      let displayLabel = '';
+
+      if (dateObj) {
+        dStr = dateObj.toISOString().slice(0, 7); // "YYYY-MM"
+        yStr = String(dateObj.getFullYear());
+        displayLabel = dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+      } else if (typeof val === 'string') {
+        dStr = val.slice(0, 7);
+        yStr = val.slice(0, 4);
+        displayLabel = val;
+      } else {
+        dStr = rawDate || 'Historical';
+        yStr = dStr.slice(0, 4);
+        displayLabel = dStr;
+      }
+
+      parsed.push({
+        pano: item.pano,
+        date: dStr,
+        year: yStr,
+        label: displayLabel,
+      });
+    });
+
+    // Sort chronological descending (most recent first)
+    parsed.sort((a, b) => b.date.localeCompare(a.date));
+
+    // Ensure active panorama is present in the array
+    if (activePano && !parsed.some(p => p.pano === activePano)) {
+      let currentLabel = rawDate;
+      if (rawDate && rawDate.includes('-')) {
+        const [y, m] = rawDate.split('-');
+        const d = new Date(Number(y), Number(m) - 1, 1);
+        if (!isNaN(d.getTime())) {
+          currentLabel = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+        }
+      }
+      parsed.unshift({
+        pano: activePano,
+        date: rawDate || 'Current',
+        year: year || '',
+        label: currentLabel || rawDate || 'Latest',
+      });
+    }
+
+    setAvailableDates(parsed);
+  }, []);
+
   // ── Fetch Street View Metadata & Historical Panoramas ───────────────────────
   const fetchPanoTimeline = useCallback((panoId, latLng = null) => {
-    if (!streetViewServiceRef.current) return;
+    if (!streetViewServiceRef.current || !window.google?.maps) return;
     if (panoId && lastFetchedPanoRef.current === panoId) return;
     if (panoId) lastFetchedPanoRef.current = panoId;
 
     setIsLoadingDates(true);
-    const request = panoId ? { pano: panoId } : (latLng ? { location: latLng, radius: 50 } : null);
+    const gMaps = window.google.maps;
+    const request = panoId
+      ? { pano: panoId }
+      : (latLng ? {
+          location: latLng,
+          radius: 120,
+          sources: [gMaps.StreetViewSource.OUTDOOR],
+          preference: gMaps.StreetViewPreference.NEAREST,
+        } : null);
+
     if (!request) {
       setIsLoadingDates(false);
       return;
@@ -239,85 +341,50 @@ export default function MapTab({
       streetViewServiceRef.current.getPanorama(request, (data, status) => {
         setIsLoadingDates(false);
         if (status === 'OK' && data) {
-          const activePano = data.location?.pano || panoId || '';
-          setCurrentPanoId(activePano);
-
-          const rawDate = data.imageDate || '';
-          setCurrentImageDate(rawDate);
-          const year = rawDate ? rawDate.split('-')[0] : '';
-          setCurrentImageYear(year);
-
-          // Parse historical panos from data.time (undocumented Google Street View history array)
-          const times = Array.isArray(data.time) ? data.time : [];
-          const parsed = [];
-
-          times.forEach((item) => {
-            if (!item || !item.pano) return;
-            const dateKey = Object.keys(item).find(k => k !== 'pano');
-            const val = dateKey ? item[dateKey] : null;
-            let dateObj = null;
-            if (val instanceof Date) {
-              dateObj = val;
-            } else if (val) {
-              const parsedD = new Date(val);
-              if (!isNaN(parsedD.getTime())) dateObj = parsedD;
-            }
-
-            let dStr = '';
-            let yStr = '';
-            let displayLabel = '';
-
-            if (dateObj) {
-              dStr = dateObj.toISOString().slice(0, 7); // "YYYY-MM"
-              yStr = String(dateObj.getFullYear());
-              displayLabel = dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
-            } else if (typeof val === 'string') {
-              dStr = val.slice(0, 7);
-              yStr = val.slice(0, 4);
-              displayLabel = val;
-            } else {
-              dStr = rawDate || 'Historical';
-              yStr = dStr.slice(0, 4);
-              displayLabel = dStr;
-            }
-
-            parsed.push({
-              pano: item.pano,
-              date: dStr,
-              year: yStr,
-              label: displayLabel,
-            });
-          });
-
-          // Sort chronological descending (most recent first)
-          parsed.sort((a, b) => b.date.localeCompare(a.date));
-
-          // Ensure active panorama is present in the array
-          if (!parsed.some(p => p.pano === activePano)) {
-            let currentLabel = rawDate;
-            if (rawDate && rawDate.includes('-')) {
-              const [y, m] = rawDate.split('-');
-              const d = new Date(Number(y), Number(m) - 1, 1);
-              if (!isNaN(d.getTime())) {
-                currentLabel = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
-              }
-            }
-            parsed.unshift({
-              pano: activePano,
-              date: rawDate || 'Current',
-              year: year || '',
-              label: currentLabel || rawDate || 'Latest',
-            });
-          }
-
-          setAvailableDates(parsed);
+          applyPanoData(data, panoId);
         }
       });
     } catch (err) {
       console.warn('Error fetching Street View timeline metadata:', err);
       setIsLoadingDates(false);
     }
-  }, []);
+  }, [applyPanoData]);
+
+  // ── Snap to Nearest Highway Outdoor Panorama ──────────────────────────────
+  const handleSnapToNearestOutdoor = useCallback((fallbackPos = null) => {
+    if (!streetViewServiceRef.current || !panoramaInstance.current || !window.google?.maps) return;
+    const gMaps = window.google.maps;
+    const targetPos = fallbackPos || currentPosition || (selectedSection?.coordinates?.begin ? { lat: selectedSection.coordinates.begin[0], lng: selectedSection.coordinates.begin[1] } : null);
+    if (!targetPos) return;
+
+    const lat = typeof targetPos.lat === 'function' ? targetPos.lat() : targetPos.lat;
+    const lng = typeof targetPos.lng === 'function' ? targetPos.lng() : targetPos.lng;
+
+    streetViewServiceRef.current.getPanorama(
+      {
+        location: { lat, lng },
+        radius: 400,
+        sources: [gMaps.StreetViewSource.OUTDOOR],
+        preference: gMaps.StreetViewPreference.NEAREST,
+      },
+      (data, status) => {
+        if (status === 'OK' && data?.location?.latLng) {
+          lastFetchedPanoRef.current = data.location.pano;
+          const snapLat = data.location.latLng.lat();
+          const snapLng = data.location.latLng.lng();
+          setCurrentPosition({ lat: snapLat, lng: snapLng });
+          panoramaInstance.current.setPano(data.location.pano);
+          panoramaInstance.current.setVisible(true);
+          setIsStreetViewActive(true);
+          setStreetViewStatus('OK');
+          applyPanoData(data, data.location.pano);
+          addToast('success', 'Road Imagery Found', 'Snapped to nearest official highway Street View.');
+        } else {
+          addToast('error', 'No Coverage', 'No official outdoor highway coverage found within 400m.');
+        }
+      }
+    );
+  }, [currentPosition, selectedSection, applyPanoData, addToast]);
 
   const selectedSectionRef = useRef(selectedSection);
   selectedSectionRef.current = selectedSection;
@@ -366,6 +433,201 @@ export default function MapTab({
     }
   }, [getSectionPathCoords]);
 
+  // ── Right-Click to Copy Coordinates ────────────────────────────────────────
+  const handleMapRightClick = useCallback((e) => {
+    if (!e || !e.latLng) return;
+    const lat = typeof e.latLng.lat === 'function' ? e.latLng.lat() : e.latLng.lat;
+    const lng = typeof e.latLng.lng === 'function' ? e.latLng.lng() : e.latLng.lng;
+    if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) return;
+
+    const coordText = `${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
+
+    // Copy to clipboard with fallback
+    const copyToClipboard = async () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(coordText);
+        } else {
+          throw new Error('Clipboard API not available');
+        }
+      } catch {
+        try {
+          const textarea = document.createElement('textarea');
+          textarea.value = coordText;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.focus();
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        } catch (err) {
+          console.warn('Fallback copy failed:', err);
+        }
+      }
+    };
+
+    copyToClipboard();
+    addToast('success', 'Coordinates Copied', `${coordText} copied to clipboard!`, 2500);
+
+    // Position floating feedback badge on map canvas
+    if (mapContainerRef.current) {
+      const rect = mapContainerRef.current.getBoundingClientRect();
+      let x = rect.width / 2;
+      let y = rect.height / 2;
+      if (e.domEvent && typeof e.domEvent.clientX === 'number') {
+        x = e.domEvent.clientX - rect.left;
+        y = e.domEvent.clientY - rect.top;
+      }
+      setCopiedCoordsBadge({ text: coordText, x, y });
+      clearTimeout(copiedBadgeTimerRef.current);
+      copiedBadgeTimerRef.current = setTimeout(() => {
+        setCopiedCoordsBadge(null);
+      }, 2000);
+    }
+  }, [addToast]);
+
+  // ── User Device Location Tracking ──────────────────────────────────────────
+  const renderUserLocation = useCallback((lat, lng, accuracy, panTo = false) => {
+    if (!googleMapInstance.current || !window.google?.maps) return;
+    const gMaps = window.google.maps;
+    const map = googleMapInstance.current;
+
+    // Animated blue pulsing GPS dot
+    const userLocationSvg = `
+      <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="20" cy="20" r="16" fill="rgba(37, 99, 235, 0.25)" stroke="rgba(37, 99, 235, 0.6)" stroke-width="1.5">
+          <animate attributeName="r" values="10;18;10" dur="2s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.8;0.2;0.8" dur="2s" repeatCount="indefinite"/>
+        </circle>
+        <circle cx="20" cy="20" r="7.5" fill="#2563eb" stroke="#ffffff" stroke-width="2.5"/>
+      </svg>
+    `;
+
+    const icon = {
+      url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(userLocationSvg)}`,
+      scaledSize: new gMaps.Size(40, 40),
+      anchor: new gMaps.Point(20, 20),
+    };
+
+    if (userLocationMarkerRef.current) {
+      userLocationMarkerRef.current.setPosition({ lat, lng });
+      userLocationMarkerRef.current.setTitle(`Your Current Location (±${Math.round(accuracy)}m)`);
+      userLocationMarkerRef.current.setMap(map);
+    } else {
+      const marker = new gMaps.Marker({
+        position: { lat, lng },
+        map,
+        title: `Your Current Location (±${Math.round(accuracy)}m)`,
+        icon,
+        zIndex: 3000,
+      });
+
+      marker.addListener('click', () => {
+        addToast('info', 'Your Location', `${lat.toFixed(6)}, ${lng.toFixed(6)} (±${Math.round(accuracy)}m)`);
+      });
+
+      marker.addListener('rightclick', handleMapRightClick);
+
+      userLocationMarkerRef.current = marker;
+    }
+
+    // Accuracy Circle
+    if (accuracy && accuracy > 0) {
+      if (userLocationCircleRef.current) {
+        userLocationCircleRef.current.setCenter({ lat, lng });
+        userLocationCircleRef.current.setRadius(accuracy);
+        userLocationCircleRef.current.setMap(map);
+      } else {
+        userLocationCircleRef.current = new gMaps.Circle({
+          strokeColor: '#3b82f6',
+          strokeOpacity: 0.45,
+          strokeWeight: 1.5,
+          fillColor: '#3b82f6',
+          fillOpacity: 0.12,
+          map,
+          center: { lat, lng },
+          radius: accuracy,
+          zIndex: 2999,
+          clickable: false,
+        });
+      }
+    }
+
+    if (panTo) {
+      suppressMapPanUntilRef.current = Date.now() + 2500;
+      map.panTo({ lat, lng });
+      if (map.getZoom() < 14) {
+        map.setZoom(16);
+      }
+    }
+  }, [addToast, handleMapRightClick]);
+
+  const handleLocateUser = useCallback(() => {
+    if (!navigator.geolocation) {
+      addToast('error', 'Geolocation Unavailable', 'Your browser does not support geolocation.');
+      return;
+    }
+
+    if (!googleMapInstance.current || !window.google?.maps) {
+      addToast('warning', 'Map Loading', 'Google Maps is still initializing. Please wait a moment.');
+      return;
+    }
+
+    // If location is already active and known, pan immediately
+    if (isLocationActive && userLocation) {
+      renderUserLocation(userLocation.lat, userLocation.lng, userLocation.accuracy, true);
+      addToast('info', 'Current Location', `Re-centered on your location (${userLocation.lat.toFixed(5)}, ${userLocation.lng.toFixed(5)}).`);
+    }
+
+    setIsLocatingUser(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setIsLocatingUser(false);
+        setIsLocationActive(true);
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const accuracy = position.coords.accuracy || 20;
+
+        setUserLocation({ lat, lng, accuracy });
+        renderUserLocation(lat, lng, accuracy, true);
+        addToast('success', 'Location Found', `Centered on your location (${lat.toFixed(5)}, ${lng.toFixed(5)}).`);
+
+        // Start background watch so the blue dot stays in sync as the user moves
+        if (!userLocationWatchIdRef.current) {
+          userLocationWatchIdRef.current = navigator.geolocation.watchPosition(
+            (pos) => {
+              const wLat = pos.coords.latitude;
+              const wLng = pos.coords.longitude;
+              const wAcc = pos.coords.accuracy || 20;
+              setUserLocation({ lat: wLat, lng: wLng, accuracy: wAcc });
+              renderUserLocation(wLat, wLng, wAcc, false);
+            },
+            (err) => {
+              console.warn('Geolocation watch error:', err);
+            },
+            { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+          );
+        }
+      },
+      (err) => {
+        setIsLocatingUser(false);
+        console.warn('Geolocation error:', err);
+        let msg = 'Could not get your current location.';
+        if (err.code === 1) {
+          msg = 'Location permission was denied. Please allow location access in your browser settings.';
+        } else if (err.code === 2) {
+          msg = 'Location information is unavailable.';
+        } else if (err.code === 3) {
+          msg = 'Location request timed out.';
+        }
+        addToast('warning', 'Location Unavailable', msg);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  }, [isLocationActive, userLocation, renderUserLocation, addToast]);
+
   // ── Map Coordinate & Place Search ──────────────────────────────────────────
   const [mapSearchText, setMapSearchText] = useState('');
   const [isSearchingMap, setIsSearchingMap] = useState(false);
@@ -409,6 +671,7 @@ export default function MapTab({
         title: label || `Target: ${lat.toFixed(5)}, ${lng.toFixed(5)}`,
         animation: gMaps.Animation.DROP,
       });
+      searchMarkerRef.current.addListener('rightclick', handleMapRightClick);
 
       // Try locating Street View panorama near this location
       if (streetViewServiceRef.current && panoramaInstance.current) {
@@ -422,33 +685,41 @@ export default function MapTab({
         }
 
         streetViewServiceRef.current.getPanorama(
-          { location: { lat, lng }, radius: 100 },
+          {
+            location: { lat, lng },
+            radius: 120,
+            sources: [gMaps.StreetViewSource.OUTDOOR],
+            preference: gMaps.StreetViewPreference.NEAREST,
+          },
           (data, status) => {
             if (status === 'OK' && data?.location?.latLng) {
               lastMapClickTimeRef.current = Date.now();
               const snapLat = data.location.latLng.lat();
               const snapLng = data.location.latLng.lng();
               setCurrentPosition({ lat: snapLat, lng: snapLng });
-              panoramaInstance.current.setPosition(data.location.latLng);
+              lastFetchedPanoRef.current = data.location.pano;
+              panoramaInstance.current.setPano(data.location.pano);
               if (fwdHeading !== null) {
                 panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
               }
               panoramaInstance.current.setVisible(true);
               setIsStreetViewActive(true);
+              setStreetViewStatus('OK');
               if (viewLayoutRef.current === 'map-only') {
                 setViewLayout('split');
               }
-              fetchPanoTimeline(data.location.pano, data.location.latLng);
+              applyPanoData(data, data.location.pano);
               addToast(
                 'success',
                 'Location & Street View Found',
                 `Navigated to ${lat.toFixed(5)}, ${lng.toFixed(5)}.`
               );
             } else {
+              setStreetViewStatus('ZERO_RESULTS');
               addToast(
                 'info',
                 'Map Centered',
-                `Centered map at ${lat.toFixed(5)}, ${lng.toFixed(5)}. (No Street View within 100m)`
+                `Centered map at ${lat.toFixed(5)}, ${lng.toFixed(5)}. (No outdoor Street View within 120m)`
               );
             }
           }
@@ -493,7 +764,7 @@ export default function MapTab({
     } else {
       addToast('warning', 'Search Unavailable', 'Geocoder service is unavailable.');
     }
-  }, [mapSearchText, addToast, fetchPanoTimeline, getSectionPathCoords]);
+  }, [mapSearchText, addToast, fetchPanoTimeline, getSectionPathCoords, handleMapRightClick]);
 
   // ── Jump Map and Street View to a Captured Distress ─────────────────────────
   const jumpToCaptureLocation = useCallback((capture) => {
@@ -530,18 +801,29 @@ export default function MapTab({
       };
 
       if (capture.panoId) {
+        lastFetchedPanoRef.current = capture.panoId;
         panoramaInstance.current.setPano(capture.panoId);
         panoramaInstance.current.setPov(targetPov);
+        setStreetViewStatus('OK');
         fetchPanoTimeline(capture.panoId, { lat, lng });
-      } else if (streetViewServiceRef.current) {
+      } else if (streetViewServiceRef.current && window.google?.maps) {
+        const gMaps = window.google.maps;
         streetViewServiceRef.current.getPanorama(
-          { location: { lat, lng }, radius: 100 },
+          {
+            location: { lat, lng },
+            radius: 120,
+            sources: [gMaps.StreetViewSource.OUTDOOR],
+            preference: gMaps.StreetViewPreference.NEAREST,
+          },
           (data, status) => {
             if (status === 'OK' && data?.location?.latLng) {
-              panoramaInstance.current.setPosition(data.location.latLng);
+              lastFetchedPanoRef.current = data.location.pano;
+              panoramaInstance.current.setPano(data.location.pano);
               panoramaInstance.current.setPov(targetPov);
-              fetchPanoTimeline(data.location.pano, data.location.latLng);
+              setStreetViewStatus('OK');
+              applyPanoData(data, data.location.pano);
             } else {
+              setStreetViewStatus('ZERO_RESULTS');
               panoramaInstance.current.setPosition({ lat, lng });
               panoramaInstance.current.setPov(targetPov);
             }
@@ -558,7 +840,7 @@ export default function MapTab({
       'Distress Located',
       `Viewing ${capture.distressType || 'distress'} at +${(capture.distanceFromStartMiles || 0).toFixed(2)} mi.`
     );
-  }, [fetchPanoTimeline, addToast]);
+  }, [fetchPanoTimeline, applyPanoData, addToast]);
 
   // Listener for targetCapture requests passed from parent
   const lastTargetCaptureTriggerRef = useRef(0);
@@ -609,14 +891,60 @@ export default function MapTab({
       // so the map canvas paints the blue extent line and red distress pins first
       focusSectionTimerRef.current = setTimeout(() => {
         if (Date.now() - lastMapClickTimeRef.current < 4000) return;
-        if (panoramaInstance.current) {
+        if (panoramaInstance.current && streetViewServiceRef.current && window.google?.maps) {
+          const gMaps = window.google.maps;
           suppressMapPanUntilRef.current = Date.now() + 1800;
-          panoramaInstance.current.setPosition(pos);
-          panoramaInstance.current.setVisible(true);
-          setIsStreetViewActive(true);
-          fetchPanoTimeline(null, pos);
+
+          // Calculate forward heading along the highway
+          let fwdHeading = 0;
+          if (path.length >= 2) {
+            fwdHeading = calculateHighwayHeadingAtPoint([pos.lat, pos.lng], path, sec.coordinates?.begin);
+          }
+
+          streetViewServiceRef.current.getPanorama(
+            {
+              location: pos,
+              radius: 150,
+              sources: [gMaps.StreetViewSource.OUTDOOR],
+              preference: gMaps.StreetViewPreference.NEAREST,
+            },
+            (data, status) => {
+              if (status === 'OK' && data?.location?.latLng) {
+                lastFetchedPanoRef.current = data.location.pano;
+                panoramaInstance.current.setPano(data.location.pano);
+                panoramaInstance.current.setPov({ heading: fwdHeading || 0, pitch: 0, zoom: 1 });
+                panoramaInstance.current.setVisible(true);
+                setIsStreetViewActive(true);
+                setStreetViewStatus('OK');
+                applyPanoData(data, data.location.pano);
+              } else {
+                // Retry with 300m radius to catch nearest highway car capture
+                streetViewServiceRef.current.getPanorama(
+                  {
+                    location: pos,
+                    radius: 300,
+                    sources: [gMaps.StreetViewSource.OUTDOOR],
+                    preference: gMaps.StreetViewPreference.NEAREST,
+                  },
+                  (retryData, retryStatus) => {
+                    if (retryStatus === 'OK' && retryData?.location?.latLng) {
+                      lastFetchedPanoRef.current = retryData.location.pano;
+                      panoramaInstance.current.setPano(retryData.location.pano);
+                      panoramaInstance.current.setPov({ heading: fwdHeading || 0, pitch: 0, zoom: 1 });
+                      panoramaInstance.current.setVisible(true);
+                      setIsStreetViewActive(true);
+                      setStreetViewStatus('OK');
+                      applyPanoData(retryData, retryData.location.pano);
+                    } else {
+                      setStreetViewStatus('ZERO_RESULTS');
+                    }
+                  }
+                );
+              }
+            }
+          );
         }
-      }, 40);
+      }, 60);
 
       return () => {
         if (focusSectionTimerRef.current) {
@@ -625,7 +953,7 @@ export default function MapTab({
         }
       };
     }
-  }, [selectedSection?.id, selectedSectionId, focusSectionTrigger, focusOnSection, fetchPanoTimeline, getSectionPathCoords, mapInstanceVersion]);
+  }, [selectedSection?.id, selectedSectionId, focusSectionTrigger, focusOnSection, applyPanoData, getSectionPathCoords, mapInstanceVersion]);
 
   // ── Snap Section to Road via Google Directions ─────────────────────────────
   const [isSnappingRoad, setIsSnappingRoad] = useState(false);
@@ -773,8 +1101,10 @@ export default function MapTab({
   // ── Switch Active Street View Date ──────────────────────────────────────────
   const handleSelectDate = useCallback((targetPanoId) => {
     if (!panoramaInstance.current || !targetPanoId) return;
+    lastFetchedPanoRef.current = targetPanoId;
     panoramaInstance.current.setPano(targetPanoId);
     setCurrentPanoId(targetPanoId);
+    setStreetViewStatus('OK');
     const match = availableDates.find(d => d.pano === targetPanoId);
     if (match) {
       setCurrentImageDate(match.date);
@@ -822,6 +1152,8 @@ export default function MapTab({
       captureMarkersRef.current = [];
       currentLocationMarkerRef.current = null;
       currentLocationDotRef.current = null;
+      userLocationMarkerRef.current = null;
+      userLocationCircleRef.current = null;
 
       // Texas default center
       const defaultCenter = { lat: 31.9686, lng: -99.9018 };
@@ -853,6 +1185,7 @@ export default function MapTab({
         enableCloseButton: false,
         fullscreenControl: false,
         imageDateControl: true, // Native capture date badge on Street View
+        source: gMaps.StreetViewSource.OUTDOOR, // Enforces official outdoor Google road imagery, avoiding private photospheres
       });
 
       // Listeners for Panorama movements
@@ -878,7 +1211,9 @@ export default function MapTab({
         const pano = panorama.getPano();
         if (pano) {
           setCurrentPanoId(pano);
-          fetchPanoTimeline(pano);
+          if (lastFetchedPanoRef.current !== pano) {
+            fetchPanoTimeline(pano);
+          }
         }
       });
 
@@ -899,6 +1234,7 @@ export default function MapTab({
 
       panorama.addListener('status_changed', () => {
         const status = panorama.getStatus();
+        setStreetViewStatus(status);
         if (status === 'ZERO_RESULTS') {
           addToast('warning', 'No Street View Imagery', 'Google Street View imagery is not available at this exact point.');
         }
@@ -924,25 +1260,38 @@ export default function MapTab({
             }
           }
 
-          streetViewServiceRef.current.getPanorama({ location: e.latLng, radius: 100 }, (data, status) => {
-            if (status === 'OK' && data?.location?.latLng) {
-              lastMapClickTimeRef.current = Date.now();
-              const snapLat = data.location.latLng.lat();
-              const snapLng = data.location.latLng.lng();
-              setCurrentPosition({ lat: snapLat, lng: snapLng });
-              suppressMapPanUntilRef.current = Date.now() + 2500;
-              panoramaInstance.current.setPosition(data.location.latLng);
-              if (fwdHeading !== null) {
-                panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
+          streetViewServiceRef.current.getPanorama(
+            {
+              location: e.latLng,
+              radius: 120,
+              sources: [gMaps.StreetViewSource.OUTDOOR],
+              preference: gMaps.StreetViewPreference.NEAREST,
+            },
+            (data, status) => {
+              if (status === 'OK' && data?.location?.latLng) {
+                lastMapClickTimeRef.current = Date.now();
+                const snapLat = data.location.latLng.lat();
+                const snapLng = data.location.latLng.lng();
+                setCurrentPosition({ lat: snapLat, lng: snapLng });
+                suppressMapPanUntilRef.current = Date.now() + 2500;
+                lastFetchedPanoRef.current = data.location.pano;
+                panoramaInstance.current.setPano(data.location.pano);
+                if (fwdHeading !== null) {
+                  panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
+                }
+                panoramaInstance.current.setVisible(true);
+                setIsStreetViewActive(true);
+                setStreetViewStatus('OK');
+                if (viewLayoutRef.current === 'map-only') {
+                  setViewLayout('split');
+                }
+                applyPanoData(data, data.location.pano);
+              } else {
+                setStreetViewStatus('ZERO_RESULTS');
+                addToast('info', 'No Street View Nearby', 'No outdoor highway Street View imagery found within 120m of click.');
               }
-              panoramaInstance.current.setVisible(true);
-              setIsStreetViewActive(true);
-              if (viewLayoutRef.current === 'map-only') {
-                setViewLayout('split');
-              }
-              fetchPanoTimeline(data.location.pano, data.location.latLng);
             }
-          });
+          );
         }
       });
 
@@ -953,10 +1302,26 @@ export default function MapTab({
         setPolylineHover(prev => (prev.visible ? { ...prev, visible: false } : prev));
       });
 
+      // Right-click anywhere on Google Map to copy coordinates
+      map.addListener('rightclick', (e) => {
+        handleMapRightClick(e);
+      });
+
+      // Prevent native browser context menu from covering map canvas on right-click
+      const mapContainerEl = mapContainerRef.current;
+      const handleContextMenu = (e) => e.preventDefault();
+      mapContainerEl?.addEventListener('contextmenu', handleContextMenu);
+
       mapDivRef.current = mapContainerRef.current;
       panoDivRef.current = panoContainerRef.current;
       googleMapInstance.current = map;
       panoramaInstance.current = panorama;
+
+      // Re-render user location if it was already active
+      if (userLocation) {
+        renderUserLocation(userLocation.lat, userLocation.lng, userLocation.accuracy, false);
+      }
+
       setMapInstanceVersion(v => v + 1);
     } catch (err) {
       console.error('Error initializing Google Maps:', err);
@@ -1039,32 +1404,67 @@ export default function MapTab({
           const lng = typeof e.latLng.lng === 'function' ? e.latLng.lng() : e.latLng.lng;
           const fwdHeading = calculateHighwayHeadingAtPoint([lat, lng], rawPath, sec.coordinates?.begin);
 
-          const applyStreetView = (pos, panoId = null) => {
+          const applyStreetView = (pos, panoId = null, panoData = null) => {
             lastMapClickTimeRef.current = Date.now();
             suppressMapPanUntilRef.current = Date.now() + 2500;
             const normLat = typeof pos.lat === 'function' ? pos.lat() : pos.lat;
             const normLng = typeof pos.lng === 'function' ? pos.lng() : pos.lng;
             setCurrentPosition({ lat: normLat, lng: normLng });
-            panoramaInstance.current.setPosition(pos);
+            if (panoId) {
+              lastFetchedPanoRef.current = panoId;
+              panoramaInstance.current.setPano(panoId);
+            } else {
+              panoramaInstance.current.setPosition(pos);
+            }
             panoramaInstance.current.setPov({ heading: fwdHeading, pitch: 0, zoom: 1 });
             panoramaInstance.current.setVisible(true);
             setIsStreetViewActive(true);
+            setStreetViewStatus('OK');
             if (viewLayoutRef.current === 'map-only') {
               setViewLayout('split');
             }
-            fetchPanoTimeline(panoId, pos);
+            if (panoData) {
+              applyPanoData(panoData, panoId);
+            } else {
+              fetchPanoTimeline(panoId, pos);
+            }
           };
 
-          if (streetViewServiceRef.current) {
-            streetViewServiceRef.current.getPanorama({ location: e.latLng, radius: 100 }, (data, status) => {
-              if (status === 'OK' && data?.location?.latLng) {
-                applyStreetView(data.location.latLng, data.location.pano);
-              } else {
-                applyStreetView(e.latLng, null);
+          if (streetViewServiceRef.current && window.google?.maps) {
+            const gMaps = window.google.maps;
+            streetViewServiceRef.current.getPanorama(
+              {
+                location: e.latLng,
+                radius: 120,
+                sources: [gMaps.StreetViewSource.OUTDOOR],
+                preference: gMaps.StreetViewPreference.NEAREST,
+              },
+              (data, status) => {
+                if (status === 'OK' && data?.location?.latLng) {
+                  applyStreetView(data.location.latLng, data.location.pano, data);
+                } else {
+                  // Retry with 250m
+                  streetViewServiceRef.current.getPanorama(
+                    {
+                      location: e.latLng,
+                      radius: 250,
+                      sources: [gMaps.StreetViewSource.OUTDOOR],
+                      preference: gMaps.StreetViewPreference.NEAREST,
+                    },
+                    (retryData, retryStatus) => {
+                      if (retryStatus === 'OK' && retryData?.location?.latLng) {
+                        applyStreetView(retryData.location.latLng, retryData.location.pano, retryData);
+                      } else {
+                        setStreetViewStatus('ZERO_RESULTS');
+                        addToast('warning', 'No Street View', 'No outdoor highway Street View imagery available along this highway segment.');
+                      }
+                    }
+                  );
+                }
               }
-            });
+            );
           } else {
-            applyStreetView(e.latLng, null);
+            applyStreetView(e.latLng, null, null);
           }
         }
       });
@@ -1101,6 +1501,11 @@ export default function MapTab({
 
       polyline.addListener('mouseout', () => {
         setPolylineHover(prev => (prev.visible ? { ...prev, visible: false } : prev));
+      });
+
+      // Right-click road polyline to copy coordinates
+      polyline.addListener('rightclick', (e) => {
+        handleMapRightClick(e);
       });
 
       polyMap.set(secId, {
@@ -1193,6 +1598,7 @@ export default function MapTab({
           strokeWeight: 2,
         },
       });
+      beginMarker.addListener('rightclick', handleMapRightClick);
 
       const endMarker = new gMaps.Marker({
         position: endPos,
@@ -1209,10 +1615,11 @@ export default function MapTab({
           strokeWeight: 2,
         },
       });
+      endMarker.addListener('rightclick', handleMapRightClick);
 
       extentMarkersRef.current.push(beginMarker, endMarker);
     }
-  }, [selectedSection?.id, selectedSection?.coordinates, sections, mapInstanceVersion]);
+  }, [selectedSection?.id, selectedSection?.coordinates, sections, mapInstanceVersion, handleMapRightClick]);
 
   // ── 3. Render Distress Capture Pins on Map ─────────────────────────────────
   useEffect(() => {
@@ -1247,10 +1654,11 @@ export default function MapTab({
       marker.addListener('click', () => {
         setInspectCapture(c);
       });
+      marker.addListener('rightclick', handleMapRightClick);
 
       captureMarkersRef.current.push(marker);
     });
-  }, [selectedSection?.id, selectedSection?.captures, mapInstanceVersion]);
+  }, [selectedSection?.id, selectedSection?.captures, mapInstanceVersion, handleMapRightClick]);
 
   // ── Synchronize Live Street View Location & Heading Indicator on Map ───────
   useEffect(() => {
@@ -1315,6 +1723,7 @@ export default function MapTab({
         }
         googleMapInstance.current.panTo(pos);
       });
+      marker.addListener('rightclick', handleMapRightClick);
 
       currentLocationMarkerRef.current = marker;
     }
@@ -1334,7 +1743,7 @@ export default function MapTab({
       });
       currentLocationDotRef.current = dot;
     }
-  }, [currentPosition, currentPov?.heading, currentDistance, mapInstanceVersion]);
+  }, [currentPosition, currentPov?.heading, currentDistance, mapInstanceVersion, handleMapRightClick]);
 
   // Clean up location markers on unmount
   useEffect(() => {
@@ -1346,6 +1755,22 @@ export default function MapTab({
       if (currentLocationDotRef.current) {
         currentLocationDotRef.current.setMap(null);
         currentLocationDotRef.current = null;
+      }
+      if (userLocationWatchIdRef.current != null) {
+        navigator.geolocation?.clearWatch(userLocationWatchIdRef.current);
+        userLocationWatchIdRef.current = null;
+      }
+      if (userLocationMarkerRef.current) {
+        userLocationMarkerRef.current.setMap(null);
+        userLocationMarkerRef.current = null;
+      }
+      if (userLocationCircleRef.current) {
+        userLocationCircleRef.current.setMap(null);
+        userLocationCircleRef.current = null;
+      }
+      if (copiedBadgeTimerRef.current) {
+        clearTimeout(copiedBadgeTimerRef.current);
+        copiedBadgeTimerRef.current = null;
       }
     };
   }, []);
@@ -1372,14 +1797,67 @@ export default function MapTab({
 
     const coord = atEnd ? selectedSection.coordinates.end : selectedSection.coordinates.begin;
     const pos = { lat: coord[0], lng: coord[1] };
-
-    panoramaInstance.current.setPosition(pos);
-    panoramaInstance.current.setVisible(true);
-    setIsStreetViewActive(true);
+    const rawPath = getSectionPathCoords(selectedSection);
+    const fwdHeading = rawPath.length >= 2
+      ? calculateHighwayHeadingAtPoint([pos.lat, pos.lng], rawPath, selectedSection.coordinates?.begin)
+      : 0;
 
     focusOnSection();
-    fetchPanoTimeline(null, pos);
-  }, [selectedSection, addToast, fetchPanoTimeline, focusOnSection]);
+
+    if (streetViewServiceRef.current && window.google?.maps) {
+      const gMaps = window.google.maps;
+      streetViewServiceRef.current.getPanorama(
+        {
+          location: pos,
+          radius: 150,
+          sources: [gMaps.StreetViewSource.OUTDOOR],
+          preference: gMaps.StreetViewPreference.NEAREST,
+        },
+        (data, status) => {
+          if (status === 'OK' && data?.location?.latLng) {
+            lastFetchedPanoRef.current = data.location.pano;
+            setCurrentPosition({
+              lat: data.location.latLng.lat(),
+              lng: data.location.latLng.lng(),
+            });
+            panoramaInstance.current.setPano(data.location.pano);
+            panoramaInstance.current.setPov({ heading: fwdHeading || 0, pitch: 0, zoom: 1 });
+            panoramaInstance.current.setVisible(true);
+            setIsStreetViewActive(true);
+            setStreetViewStatus('OK');
+            applyPanoData(data, data.location.pano);
+          } else {
+            streetViewServiceRef.current.getPanorama(
+              {
+                location: pos,
+                radius: 300,
+                sources: [gMaps.StreetViewSource.OUTDOOR],
+                preference: gMaps.StreetViewPreference.NEAREST,
+              },
+              (rData, rStatus) => {
+                if (rStatus === 'OK' && rData?.location?.latLng) {
+                  lastFetchedPanoRef.current = rData.location.pano;
+                  setCurrentPosition({
+                    lat: rData.location.latLng.lat(),
+                    lng: rData.location.latLng.lng(),
+                  });
+                  panoramaInstance.current.setPano(rData.location.pano);
+                  panoramaInstance.current.setPov({ heading: fwdHeading || 0, pitch: 0, zoom: 1 });
+                  panoramaInstance.current.setVisible(true);
+                  setIsStreetViewActive(true);
+                  setStreetViewStatus('OK');
+                  applyPanoData(rData, rData.location.pano);
+                } else {
+                  setStreetViewStatus('ZERO_RESULTS');
+                  addToast('warning', 'No Street View', 'Could not locate official outdoor roadway imagery near section start.');
+                }
+              }
+            );
+          }
+        }
+      );
+    }
+  }, [selectedSection, addToast, focusOnSection, getSectionPathCoords, applyPanoData]);
 
   // ── Capture Distress Action ────────────────────────────────────────────────
   const handleCaptureDistress = useCallback(async () => {
@@ -1553,6 +2031,29 @@ export default function MapTab({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* My Location Toolbar Button */}
+          <button
+            type="button"
+            className={`btn btn--sm ${isLocationActive ? 'btn--primary' : 'btn--secondary'}`}
+            onClick={handleLocateUser}
+            disabled={isLocatingUser}
+            title={isLocationActive ? "Re-center map on your location" : "Show my current location on map"}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontWeight: 600,
+              boxShadow: isLocationActive ? '0 0 10px rgba(37, 99, 235, 0.4)' : 'none',
+            }}
+          >
+            {isLocatingUser ? (
+              <span className="spinner" style={{ width: 13, height: 13 }} />
+            ) : (
+              <span>📍</span>
+            )}
+            <span>{isLocatingUser ? 'Locating…' : 'My Location'}</span>
+          </button>
+
           {/* Layout Toggle */}
           <div className="segmented-group">
             <button
@@ -1760,6 +2261,73 @@ export default function MapTab({
             </div>
           )}
 
+          {/* Floating My Location Map Control */}
+          <button
+            type="button"
+            onClick={handleLocateUser}
+            disabled={isLocatingUser}
+            title={isLocationActive ? "Re-center map on your location" : "Show my current location"}
+            aria-label="Show my current location"
+            style={{
+              position: 'absolute',
+              top: 60,
+              right: 14,
+              zIndex: 25,
+              width: 38,
+              height: 38,
+              borderRadius: '50%',
+              background: isLocationActive ? '#2563eb' : 'rgba(15, 23, 42, 0.92)',
+              backdropFilter: 'blur(8px)',
+              border: isLocationActive ? '2px solid #ffffff' : '1px solid rgba(255, 255, 255, 0.25)',
+              boxShadow: isLocationActive ? '0 0 14px rgba(37, 99, 235, 0.6)' : '0 4px 14px rgba(0, 0, 0, 0.35)',
+              color: '#ffffff',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.2s ease',
+            }}
+          >
+            {isLocatingUser ? (
+              <span className="spinner" style={{ width: 16, height: 16 }} />
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+              </svg>
+            )}
+          </button>
+
+          {/* Right-click Copied Coordinates Floating Badge */}
+          {copiedCoordsBadge && (
+            <div
+              style={{
+                position: 'absolute',
+                left: Math.max(90, Math.min(copiedCoordsBadge.x, (mapDivRef.current?.clientWidth || 400) - 90)),
+                top: Math.max(30, copiedCoordsBadge.y - 12),
+                transform: 'translate(-50%, -100%)',
+                background: 'rgba(15, 23, 42, 0.94)',
+                backdropFilter: 'blur(8px)',
+                border: '1.5px solid #10b981',
+                color: '#ffffff',
+                padding: '5px 12px',
+                borderRadius: '8px',
+                fontSize: 12,
+                fontWeight: 700,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.4), 0 0 10px rgba(16, 185, 129, 0.3)',
+                pointerEvents: 'none',
+                zIndex: 100,
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <span style={{ color: '#10b981', fontSize: 13 }}>📋 Copied</span>
+              <span style={{ color: '#f8fafc', fontWeight: 600 }}>{copiedCoordsBadge.text}</span>
+            </div>
+          )}
+
           <div
             key="map-canvas"
             ref={mapContainerRef}
@@ -1861,6 +2429,46 @@ export default function MapTab({
               >
                 Enter Street View
               </button>
+            </div>
+          )}
+
+          {/* Recovery HUD if Street View status is ZERO_RESULTS */}
+          {isStreetViewActive && streetViewStatus === 'ZERO_RESULTS' && (
+            <div style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'rgba(15, 23, 42, 0.92)',
+              backdropFilter: 'blur(6px)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 20,
+              padding: 24,
+              textAlign: 'center',
+              color: '#fff',
+            }}>
+              <div style={{ fontSize: 36, marginBottom: 12 }}>📷</div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>
+                No Highway Imagery Found Here
+              </div>
+              <div style={{ fontSize: 13, color: '#94a3b8', maxWidth: 380, marginBottom: 18, lineHeight: 1.5 }}>
+                Google Street View does not have official outdoor roadway imagery at this exact point. You can snap to the nearest highway imagery or return to the section start.
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  className="btn btn--primary btn--sm"
+                  onClick={() => handleSnapToNearestOutdoor()}
+                >
+                  🔄 Snap to Nearest Highway
+                </button>
+                <button
+                  className="btn btn--secondary btn--sm"
+                  onClick={() => handleEnterStreetView(false)}
+                >
+                  ⬅ Section Start
+                </button>
+              </div>
             </div>
           )}
 
